@@ -1,32 +1,77 @@
-from monai.data import DataLoader
+import torch
+import mlflow
+
+from tqdm import tqdm
+from datetime import datetime
+from utils import save_conda_env
+from dataset import ResNetDataset
+from preprocessor import Preprocessor
 from monai.networks.nets import resnet
 from monai.optimizers import Novograd
-import torch
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score, matthews_corrcoef
-from dataset import ResNetDataset
+from torch.utils.data import DataLoader
+from param_configurator import ParamConfigurator
 
-def main():
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import matthews_corrcoef
+from sklearn.metrics import balanced_accuracy_score
 
-    train_dataset = ResNetDataset(data_dir="/home/johannes/Code/ResponsePrediction/data/sarcoma/preprocessed/T1_UWS_pre", split="train")
-    val_dataset = ResNetDataset(data_dir="/home/johannes/Code/ResponsePrediction/data/sarcoma/preprocessed/T1_UWS_pre", split="val")
-    test_dataset = ResNetDataset(data_dir="/home/johannes/Code/ResponsePrediction/data/sarcoma/preprocessed/T1_TUM_pre", split="test")
 
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    # Initialize ResNet50 model, loss function, and optimizer
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = resnet.resnet50(spatial_dims=3, n_input_channels=1, num_classes=2).to(device)
-    loss_function = torch.nn.CrossEntropyLoss()
-    optimizer = Novograd(model.parameters(), lr=1e-4)
+def main(config) -> None:
+
+    save_conda_env(config)
+    mlflow.log_params(config.__dict__)    
+
+    match config.dataset:
+        case "sarcoma":
+            train_dataset = ResNetDataset(data_dir="/home/johannes/Code/ResponsePrediction/data/sarcoma/preprocessed/T1_UWS_pre", split="train")
+            val_dataset = ResNetDataset(data_dir="/home/johannes/Code/ResponsePrediction/data/sarcoma/preprocessed/T1_UWS_pre", split="val")
+            test_dataset = ResNetDataset(data_dir="/home/johannes/Code/ResponsePrediction/data/sarcoma/preprocessed/T1_TUM_pre", split="test")  
+        
+        case "glioblastoma":
+            raise ValueError("Not yet implemented!") ## TODO
+
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
+
+    num_channels = 0
+    match config.sequence:
+        case "T1T2":
+            num_channels += 2
+        case _:
+            num_channels += 1
+    
+    match config.examination:
+        case "prepost":
+            num_channels += 2
+        case _:
+            num_channels += 1    
+
+    match config.task:
+        case "classification":
+            loss_function = torch.nn.CrossEntropyLoss()
+            output_neurons = 2
+        case "regression":
+            loss_function = torch.nn.MSELoss()    
+            output_neurons = 1
+    
+    model = resnet.resnet50(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)       
+    
+    match config.optimizer:
+        case "SGD":
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+        case "Adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+        case "Novograd":
+            optimizer = Novograd(model.parameters(), lr=1e-4)
 
     # Gradient accumulation and AMP
-    accumulation_steps = 8
+    accumulation_steps = config.accumulation_steps
     scaler = torch.amp.GradScaler('cuda')
 
     # Training loop
-    num_epochs = 100
+    num_epochs = config.num_epochs
     best_metric = -1
     for epoch in range(num_epochs):
         print(f"Epoch {epoch+1}/{num_epochs}")
@@ -36,9 +81,9 @@ def main():
         train_prob = []
         train_epoch_loss = 0
         for batch_idx, batch_data in enumerate(train_loader):
-            inputs = batch_data[0].to(device)
-            labels = batch_data[1].to(device)
-            with torch.amp.autocast(device_type='cuda', dtype=torch.float16):                
+            inputs = batch_data[0].to(config.device)
+            labels = batch_data[1].to(config.device)
+            with torch.amp.autocast(device_type=config.device, dtype=torch.float16):                
                 outputs = model(inputs)
                 loss = loss_function(outputs, labels)
                 loss = loss / accumulation_steps
@@ -67,8 +112,8 @@ def main():
             val_prob = []
             val_epoch_loss = 0
             for val_data in val_loader:
-                val_images = val_data[0].to(device)
-                val_labels = val_data[1].to(device)
+                val_images = val_data[0].to(config.device)
+                val_labels = val_data[1].to(config.device)
 
                 val_outputs = model(val_images)
                 val_loss = loss_function(val_outputs, val_labels)
@@ -106,8 +151,8 @@ def main():
         test_prob = []
         test_epoch_loss = 0
         for test_data in test_loader:
-            test_images = test_data[0].to(device)
-            test_labels = test_data[1].to(device)
+            test_images = test_data[0].to(config.device)
+            test_labels = test_data[1].to(config.device)
 
             test_outputs = model(test_images)
             test_loss = loss_function(test_outputs, test_labels)
@@ -131,7 +176,19 @@ def main():
 if __name__ == "__main__":
 
     for task in ["classification", "regression"]:
-        for sequence in ["T1", "T2", "both"]:
-            for examination in ["pre", "post", "both"]:
+        for sequence in ["T1T2", "T2", "T1T2"]:
+            for examination in ["prepost", "post", "prepost"]:
+
+                config = ParamConfigurator()
+                config.task = task
+                config.sequence = sequence
+                config.examination = examination
+
+                preprocess = Preprocessor(config=config)
+                preprocess()
+
+                mlflow.set_experiment(f'{config.model_name}')
+                date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
+                with mlflow.start_run(run_name=date, log_system_metrics=True):
+                    main(config)                
                 
-                main(task, sequence, examination)
