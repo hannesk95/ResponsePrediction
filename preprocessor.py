@@ -202,7 +202,7 @@ class Preprocessor:
             img_filename = os.path.basename(img_path)
             patient_id = img_filename.split("_")[0]
 
-            if "post" in img_path:
+            if "post" in img_filename:
                 therapy = img_filename.split("_")[1]
                 patient_pcr_value = img_filename.split("_")[2]
                 seg_filename = patient_id + "-label_" + therapy + "_" + patient_pcr_value
@@ -247,7 +247,7 @@ class Preprocessor:
             img_filename = os.path.basename(img_path)
             patient_id = img_filename.split("_")[0]
 
-            if "post" in img_path:
+            if "post" in img_filename:
                 therapy = img_filename.split("_")[1]
                 patient_pcr_value = img_filename.split("_")[2]
                 seg_filename = patient_id + "-label_" + therapy + "_" + patient_pcr_value
@@ -344,3 +344,4 @@ class Preprocessor:
             self.save()          
             self.clean_up()  
             return
+        
