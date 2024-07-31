@@ -24,10 +24,12 @@ class ParamConfigurator:
         assert self.dataset in ["sarcoma", "glioblastoma"]
 
         self.sequence = config['data']['sequence']
-        assert self.sequence in ["T1", "T2", "T1T2"]
+        assert self.sequence in ["T1", "T2", "T1T2"], "Please choose 'T1', 'T2' or 'T1T2'!"
 
         self.examination = config['data']['examination']
-        assert self.examination in ['pre', 'post', 'prepost']
+        assert self.examination in ['pre', 'post', 'prepost'], "Please choose 'pre', 'post' or 'prepost'!"
+
+        self.channels = None
 
         self.artifact_dir = config['data']['artifact_directory']
         if not os.path.exists(self.artifact_dir):
@@ -46,7 +48,7 @@ class ParamConfigurator:
 
         # Training
         self.task = config['training']['task']
-        assert self.task in ["classification", "regression"]
+        assert self.task in ["classification", "regression"], "Please choose 'classification' or 'regression'!"
         self.batch_size = config['training'].getint('batch_size')
         self.accumulation_steps = config['training'].getint('accumulation_steps')
         self.epochs = config['training'].getint('epochs')
