@@ -59,6 +59,80 @@ class Preprocessor:
             case "glioblastoma":
                 data_dir = "/home/johannes/Code/ResponsePrediction/data/glioblastoma"
                 # TODO: Implement Code for Glioblastoma           
+                    
+    
+    def bias_field_correction(self):
+
+        files = self.train_files
+        for img_path in tqdm(files):
+            parent_path = Path(img_path).parent
+            patient_id = os.path.basename(img_path)[:6]
+            img_filename = os.path.basename(img_path).replace("nrrd", "nii.gz")
+
+            if "post" in img_filename:
+                seg_path = glob(os.path.join(parent_path, f"{patient_id}*label_post*"))[0]
+                seg_filename = os.path.basename(seg_path).replace("nrrd", "nii.gz")
+                seg = sitk.ReadImage(seg_path)
+            else:
+                seg_path = glob(os.path.join(parent_path, f"{patient_id}*label*"))[0]
+                seg_filename = os.path.basename(seg_path).replace("nrrd", "nii.gz")
+                seg = sitk.ReadImage(seg_path)
+
+            image = sitk.ReadImage(img_path)
+            # Convert the image to a float type for processing
+            image = sitk.Cast(image, sitk.sitkFloat32)
+
+            # Initialize the N4 Bias Field Correction object
+            corrector = sitk.N4BiasFieldCorrectionImageFilter()
+
+            # Optionally, you can provide a mask. If no mask is provided, one is automatically estimated
+            # if mask is None:
+            mask = sitk.OtsuThreshold(image, 0, 1, 200)
+
+            # Apply the bias field correction
+            corrected_image = corrector.Execute(image, mask)
+            
+            sitk.WriteImage(corrected_image, os.path.join(self.train_dir, img_filename))
+            sitk.WriteImage(seg, os.path.join(self.train_dir, seg_filename))
+        
+        self.train_files = glob(os.path.join(self.train_dir, "*"))
+        self.train_files = [file for file in self.train_files if not "label" in file]
+        
+        files = self.test_files
+        for img_path in tqdm(files):
+            parent_path = Path(img_path).parent
+            patient_id = os.path.basename(img_path)[:4]
+            img_filename = os.path.basename(img_path).replace("nrrd", "nii.gz")
+
+            if "post" in img_filename:
+                seg_path = glob(os.path.join(parent_path, f"{patient_id}*label_post*"))[0]
+                seg_filename = os.path.basename(seg_path).replace("nrrd", "nii.gz")
+                seg = sitk.ReadImage(seg_path)
+            else:
+                seg_path = glob(os.path.join(parent_path, f"{patient_id}*label*"))[0]
+                seg_filename = os.path.basename(seg_path).replace("nrrd", "nii.gz")
+                seg = sitk.ReadImage(seg_path)
+
+            image = sitk.ReadImage(img_path)
+            # Convert the image to a float type for processing
+            image = sitk.Cast(image, sitk.sitkFloat32)
+
+            # Initialize the N4 Bias Field Correction object
+            corrector = sitk.N4BiasFieldCorrectionImageFilter()
+
+            # Optionally, you can provide a mask. If no mask is provided, one is automatically estimated
+            # if mask is None:
+            mask = sitk.OtsuThreshold(image, 0, 1, 200)
+
+            # Apply the bias field correction
+            corrected_image = corrector.Execute(image, mask)
+            
+            sitk.WriteImage(corrected_image, os.path.join(self.test_dir, img_filename))
+            sitk.WriteImage(seg, os.path.join(self.test_dir, seg_filename))
+        
+        self.test_files = glob(os.path.join(self.test_dir, "*"))
+        self.test_files = [file for file in self.test_files if not "label" in file]   
+
 
     def get_spacing(self, metric="median"):
         """TODO: Docstring"""
@@ -100,7 +174,7 @@ class Preprocessor:
             img_filename = os.path.basename(img_path)
             patient_id = img_filename.split("_")[0]
 
-            if "post" in img_path:
+            if "post" in img_filename:
                 therapy = img_filename.split("_")[1]
                 patient_pcr_value = img_filename.split("_")[2]
                 seg_filename = patient_id + "-label_" + therapy + "_" + patient_pcr_value
@@ -122,8 +196,8 @@ class Preprocessor:
 
             img.save(new_img_path)
             seg.save(new_seg_path)
-        self.train_files = glob(os.path.join(self.train_dir, "*"))
-        self.train_files = [file for file in self.train_files if not "label" in file]
+        # self.train_files = glob(os.path.join(self.train_dir, "*"))
+        # self.train_files = [file for file in self.train_files if not "label" in file]
         
         # Resample testing files
         files = self.test_files
@@ -132,7 +206,7 @@ class Preprocessor:
             img_filename = os.path.basename(img_path)
             patient_id = img_filename.split("_")[0]
 
-            if "post" in img_path:
+            if "post" in img_filename:
                 therapy = img_filename.split("_")[1]
                 patient_pcr_value = img_filename.split("_")[2]
                 seg_filename = patient_id + "-label_" + therapy + "_" + patient_pcr_value
@@ -154,8 +228,8 @@ class Preprocessor:
 
             img.save(new_img_path)
             seg.save(new_seg_path)
-        self.test_files = glob(os.path.join(self.test_dir, "*"))
-        self.test_files = [file for file in self.test_files if not "label" in file]
+        # self.test_files = glob(os.path.join(self.test_dir, "*"))
+        # self.test_files = [file for file in self.test_files if not "label" in file]    
 
     def register_data(self):
         pass
@@ -363,10 +437,11 @@ class Preprocessor:
     def __call__(self):
         if self.get_raw_data():
             return 
-        else:
+        else:            
+            self.bias_field_correction()
             self.get_spacing()
-            self.resample_data()
-            # self.register_data()
+            self.resample_data()            
+            self.register_data()
             self.get_size()
             self.crop_pad()
             self.normalize()
