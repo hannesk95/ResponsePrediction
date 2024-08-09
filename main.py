@@ -27,9 +27,9 @@ from sklearn.metrics import root_mean_squared_error
 
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-from losses.combined import WeightedCombinedLosses
-from losses.soft_f1 import SoftF1LossWithLogits
-from losses.soft_mcc import SoftMCCWithLogitsLoss
+from utils import WeightedCombinedLosses
+from utils import SoftF1LossWithLogits
+from utils import SoftMCCWithLogitsLoss
 
 
 def main(config) -> None:
