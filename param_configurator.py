@@ -27,7 +27,7 @@ class ParamConfigurator:
         assert self.sequence in ["T1", "T2", "T1T2"], "Please choose 'T1', 'T2' or 'T1T2'!"
 
         self.examination = config['data']['examination']
-        assert self.examination in ['pre', 'post', 'prepost'], "Please choose 'pre', 'post' or 'prepost'!"
+        assert self.examination in ['pre', 'post', 'prepost'], "Please choose examination out of 'pre', 'post' or 'prepost'!"
 
         self.channels = None
 
@@ -45,6 +45,8 @@ class ParamConfigurator:
 
         # Architecture
         self.model_name = config['architecture']['model_name']
+        self.model_depth = config['architecture'].getint('model_depth')
+        assert self.model_depth in [18, 34, 50, 101, 152, 200], "Please choose model depth out ouf '18', '34', '50', '101', '152', '200'"
 
         # Training
         self.task = config['training']['task']
@@ -52,7 +54,11 @@ class ParamConfigurator:
         self.batch_size = config['training'].getint('batch_size')
         self.accumulation_steps = config['training'].getint('accumulation_steps')
         self.epochs = config['training'].getint('epochs')
-        self.num_workers = config['training'].getint('num_workers')        
+        self.num_workers = config['training'].getint('num_workers')       
+        self.imbalance = config['training']['imbalance']
+        assert self.imbalance in ['weight', 'oversample'] 
+        self.imbalance_loss = config['training']['imbalance_loss']
+        assert self.imbalance_loss in ['MCC', 'F1']
 
         # Optimizer
         self.learning_rate = config['optimizer'].getfloat('learning_rate')        

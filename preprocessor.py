@@ -160,7 +160,7 @@ class Preprocessor:
     def register_data(self):
         pass
 
-    def get_size(self, metric="min"):
+    def get_size(self, metric="median"):
         """TODO: Docstring"""
         
         size_x = []
@@ -192,7 +192,7 @@ class Preprocessor:
 
         print(f"Target Size: {self.target_size} ({metric})")
 
-    def crop_pad_normalize(self):
+    def crop_pad(self):
         """TODO: Docstring"""        
 
         # Crop, Pad, Normalize Training Files
@@ -217,9 +217,10 @@ class Preprocessor:
                 segmentation=tio.LabelMap(seg_path)
             )
 
-            transform = tio.CropOrPad(target_shape=(120, 80, 180), mask_name='segmentation')
+            transform = tio.CropOrPad(target_shape=self.target_size, mask_name='segmentation')
             transformed = transform(subject)
-            img = tio.transforms.ZNormalization()(transformed.image)
+            # img = tio.transforms.ZNormalization()(transformed.image)
+            img = transformed.image
             seg = transformed.segmentation
 
             # img = tio.ScalarImage(img_path)
@@ -237,8 +238,8 @@ class Preprocessor:
             # img = pad(img)
             # seg = pad(seg)
 
-            img.save(img_path)
-            seg.save(seg_path)
+            img.save(img_path.replace(".nii.gz", "_crop.nii.gz"))
+            seg.save(seg_path.replace(".nii.gz", "_crop.nii.gz"))
         
         # Crop, Pad, Normalize Testing Files
         files = self.test_files
@@ -262,9 +263,10 @@ class Preprocessor:
                 segmentation=tio.LabelMap(seg_path)
             )
 
-            transform = tio.CropOrPad(target_shape=(120, 80, 180), mask_name='segmentation')
+            transform = tio.CropOrPad(target_shape=self.target_size, mask_name='segmentation')
             transformed = transform(subject)
-            img = tio.transforms.ZNormalization()(transformed.image)
+            # img = tio.transforms.ZNormalization()(transformed.image)
+            img = transformed.image
             seg = transformed.segmentation
             
             # img = tio.ScalarImage(img_path)
@@ -282,15 +284,40 @@ class Preprocessor:
             # img = pad(img)
             # seg = pad(seg)
 
-            img.save(img_path)
-            seg.save(seg_path)
+            img.save(img_path.replace(".nii.gz", "_crop.nii.gz"))
+            seg.save(seg_path.replace(".nii.gz", "_crop.nii.gz"))
 
+    def normalize(self):
+
+        files = self.train_files
+        for img_path in tqdm(files):
+            img_path = img_path.replace(".nii.gz", "_crop.nii.gz")
+
+            subject = tio.Subject(
+                image=tio.ScalarImage(img_path)
+            )
+            img = tio.transforms.ZNormalization()(subject.image)
+            img.save(img_path.replace("crop", "crop_norm"))
+
+        
+        files = self.test_files
+        for img_path in tqdm(files):
+            img_path = img_path.replace(".nii.gz", "_crop.nii.gz")
+
+            subject = tio.Subject(
+                image=tio.ScalarImage(img_path)
+            )
+            img = tio.transforms.ZNormalization()(subject.image)
+            img.save(img_path.replace("crop", "crop_norm"))
+
+    
     def save(self):
         """TODO: Docstring"""
 
         # Save training files as torch .pt file
         files = self.train_files
         for image_path in tqdm(files):
+            image_path = image_path.replace(".nii.gz", "_crop_norm.nii.gz")
             nifti_img = nib.load(image_path)
 
             # Get the data as a numpy array
@@ -302,12 +329,13 @@ class Preprocessor:
             # Optionally, add a channel dimension if needed
             tensor_data = tensor_data.unsqueeze(0)  # Shape: (1, H, W, D)
 
-            torch_filename = image_path.replace("nii.gz", "pt")
+            torch_filename = image_path.replace("_crop_norm.nii.gz", ".pt")
             torch.save(tensor_data, torch_filename)
         
         # Save testing files as torch .pt file
         files = self.test_files
         for image_path in tqdm(files):
+            image_path = image_path.replace(".nii.gz", "_crop_norm.nii.gz")
             nifti_img = nib.load(image_path)
 
             # Get the data as a numpy array
@@ -319,7 +347,7 @@ class Preprocessor:
             # Optionally, add a channel dimension if needed
             tensor_data = tensor_data.unsqueeze(0)  # Shape: (1, H, W, D)
 
-            torch_filename = image_path.replace("nii.gz", "pt")
+            torch_filename = image_path.replace("_crop_norm.nii.gz", ".pt")
             torch.save(tensor_data, torch_filename)
     
     def clean_up(self):
@@ -338,10 +366,11 @@ class Preprocessor:
         else:
             self.get_spacing()
             self.resample_data()
-            self.register_data()
+            # self.register_data()
             self.get_size()
-            self.crop_pad_normalize()
+            self.crop_pad()
+            self.normalize()
             self.save()          
-            self.clean_up()  
+            # self.clean_up()  
             return
         

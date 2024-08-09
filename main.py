@@ -1,30 +1,43 @@
+import os
 import torch
 import mlflow
 import numpy as np
+import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from datetime import datetime
 from utils import save_conda_env
+from utils import create_confusion_matrix
 from dataset import ResNetDataset
 from preprocessor import Preprocessor
 from postprocessor import Postprocessor
 from monai.networks.nets import resnet
 from monai.optimizers import Novograd
 from torch.utils.data import DataLoader
+from torch.utils.data import WeightedRandomSampler
 from param_configurator import ParamConfigurator
 
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import matthews_corrcoef
 from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import f1_score
 
 from sklearn.metrics import r2_score
 from sklearn.metrics import root_mean_squared_error
+
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+from losses.combined import WeightedCombinedLosses
+from losses.soft_f1 import SoftF1LossWithLogits
+from losses.soft_mcc import SoftMCCWithLogitsLoss
 
 
 def main(config) -> None:
 
     save_conda_env(config)
+    # save_python_files(config) # TODO: save python files tracked by git in artifacts
     mlflow.log_params(config.__dict__)    
+
 
     match config.dataset:
         case "sarcoma":
@@ -35,7 +48,10 @@ def main(config) -> None:
         case "glioblastoma":
             raise ValueError("Not yet implemented!") # TODO
 
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+    sampler = WeightedRandomSampler(weights=train_dataset.sample_weights, 
+                                    num_samples=len(train_dataset.sample_weights),
+                                    replacement=True)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, sampler=sampler)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
 
@@ -56,21 +72,46 @@ def main(config) -> None:
 
     match config.task:
         case "classification":
-            loss_function = torch.nn.CrossEntropyLoss()
+            weights = None
+            imbalance_loss = {"MCC": SoftMCCWithLogitsLoss(), "F1": SoftF1LossWithLogits()}
+            if config.imbalance == "weight":
+                weights = train_dataset.class_weights                
+            
+            loss_function = WeightedCombinedLosses([torch.nn.CrossEntropyLoss(), imbalance_loss[config.imbalance_loss]], weights=weights)
             output_neurons = 2
         case "regression":
             loss_function = torch.nn.MSELoss()    
             output_neurons = 1
+
+    match config.model_name:
+        case "ResNet":
+            match config.model_depth:
+                case 18:
+                    model = resnet.resnet18(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)   
+                case 34:
+                    model = resnet.resnet34(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)
+                case 50:
+                    model = resnet.resnet50(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
+                case 101:
+                    model = resnet.resnet101(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
+                case 152:
+                    model = resnet.resnet152(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)    
+        case _:
+            raise ValueError(f"Given model name '{config.model_name}' is not implemented!")  
     
-    model = resnet.resnet50(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)       
-    
+    if config.task == "regression":
+        model.fc = torch.nn.Sequential(torch.nn.Linear(model.fc.in_features, out_features=output_neurons, bias=True),
+                                       torch.nn.Sigmoid()).to(config.device)
+
     match config.optimizer:
         case "SGD":
             optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         case "Adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         case "Novograd":
-            optimizer = Novograd(model.parameters(), lr=1e-4)
+            optimizer = Novograd(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=config.scheduler_step, gamma=config.scheduler_gamma)
 
     # Gradient accumulation and AMP
     accumulation_steps = config.accumulation_steps
@@ -86,6 +127,7 @@ def main(config) -> None:
         train_pred = []
         train_prob = []
         train_epoch_loss = 0
+        lr = scheduler.get_last_lr()[0]
         for batch_idx, batch_data in enumerate(train_loader):
             inputs = batch_data[0].to(config.device)
             labels = batch_data[1].to(config.device)
@@ -114,11 +156,14 @@ def main(config) -> None:
                     train_pred.append(outputs.flatten().detach().cpu().numpy())
         
         train_loss = train_epoch_loss/len(train_loader)
+        scheduler.step()
+        mlflow.log_metric("learning_rate", lr, step=epoch)
         match config.task:
             case "classification":
                 train_bacc = balanced_accuracy_score(train_true, train_pred)
-                train_auc = roc_auc_score(train_true, train_prob, average='weighted')
+                train_auc = roc_auc_score(train_true, train_prob)
                 train_mcc = matthews_corrcoef(train_true, train_pred)
+                train_f1 = f1_score(train_true, train_pred)
             case "regression":
                 train_r2 = r2_score(train_true, train_pred)
                 train_rmse = root_mean_squared_error(train_true, train_pred)
@@ -138,13 +183,12 @@ def main(config) -> None:
                 val_outputs = model(val_images)
 
                 if config.task == "classification":
-                    val_loss = loss_function(val_outputs, labels)
+                    val_loss = loss_function(val_outputs, val_labels)
                 elif config.task == "regression":
-                    val_loss = loss_function(val_outputs.flatten(), labels)
+                    val_loss = loss_function(val_outputs.flatten(), val_labels)
                 
                 val_epoch_loss =+ val_loss.item()
                 val_true.append(val_labels.cpu().numpy())
-
 
                 match config.task:
                     case "classification":
@@ -157,8 +201,9 @@ def main(config) -> None:
             match config.task:
                 case "classification":
                     val_bacc = balanced_accuracy_score(val_true, val_pred)
-                    val_auc = roc_auc_score(val_true, val_prob, average='weighted')         
+                    val_auc = roc_auc_score(val_true, val_prob)         
                     val_mcc = matthews_corrcoef(val_true, val_pred)
+                    val_f1 = f1_score(val_true, val_pred)
                 case "regression":
                     val_r2 = r2_score(val_true, val_pred)
                     val_rmse = root_mean_squared_error(val_true, val_pred)
@@ -183,9 +228,30 @@ def main(config) -> None:
                 mlflow.log_metric("val_auroc", val_auc, step=epoch)
                 mlflow.log_metric("train_mcc", train_mcc, step=epoch)
                 mlflow.log_metric("val_mcc", val_mcc, step=epoch)
+                mlflow.log_metric("train_f1", train_f1, step=epoch)
+                mlflow.log_metric("val_f1", val_f1, step=epoch)
 
-                if val_mcc > best_metric:
-                    best_metric = val_mcc
+                # img, _, _ = create_confusion_matrix(train_true, train_pred)
+                # mlflow.log_image(img, key="train", step=epoch)
+                
+                cm = confusion_matrix(train_true, train_pred)                
+                disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+                disp.plot()
+                plt.savefig(f'train_confusion_matrix_{str(epoch).zfill(3)}.png')
+                mlflow.log_artifact(f'train_confusion_matrix_{str(epoch).zfill(3)}.png')
+                os.remove(f'train_confusion_matrix_{str(epoch).zfill(3)}.png') 
+                plt.close()               
+
+                cm = confusion_matrix(val_true, val_pred)                
+                disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+                disp.plot()
+                plt.savefig(f'val_confusion_matrix_{str(epoch).zfill(3)}.png')      
+                mlflow.log_artifact(f'val_confusion_matrix_{str(epoch).zfill(3)}.png')
+                os.remove(f'val_confusion_matrix_{str(epoch).zfill(3)}.png')          
+                plt.close()   
+
+                if val_f1 > best_metric:
+                    best_metric = val_f1
                     torch.save(model.state_dict(), "best_metric_model.pth")
                     print("[INFO] Saved new best metric model")
 
@@ -220,9 +286,9 @@ def main(config) -> None:
 
             test_outputs = model(test_images)
             if config.task == "classification":
-                test_loss = loss_function(test_outputs, labels)
+                test_loss = loss_function(test_outputs, test_labels)
             elif config.task == "regression":
-                test_loss = loss_function(test_outputs.flatten(), labels)
+                test_loss = loss_function(test_outputs.flatten(), test_labels)
             # test_loss = loss_function(test_outputs.flatten(), test_labels)
             
             test_epoch_loss =+ test_loss.item()
@@ -239,8 +305,9 @@ def main(config) -> None:
         match config.task:
             case "classification":
                 test_bacc = balanced_accuracy_score(test_true, test_pred)
-                test_auc = roc_auc_score(test_true, test_prob, average='weighted')
+                test_auc = roc_auc_score(test_true, test_prob)
                 test_mcc = matthews_corrcoef(test_true, test_pred)
+                test_f1 = f1_score(test_true, test_pred)
             case "regression":
                 test_r2 = r2_score(test_true, test_pred)
                 test_rmse = root_mean_squared_error(test_true, test_pred)
@@ -257,6 +324,15 @@ def main(config) -> None:
                 mlflow.log_metric("test_bacc", test_bacc)
                 mlflow.log_metric("test_auroc", test_auc)
                 mlflow.log_metric("test_mcc", test_mcc)
+                mlflow.log_metric("test_f1", test_f1)
+
+                cm = confusion_matrix(test_true, test_pred)                
+                disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+                disp.plot()
+                plt.savefig('test_confusion_matrix.png')      
+                mlflow.log_artifact('test_confusion_matrix.png')
+                os.remove('test_confusion_matrix.png')
+                plt.close()   
 
             case "regression":
                 # print(f"Test R2:      {test_r2}")       
@@ -271,23 +347,25 @@ def main(config) -> None:
 
 if __name__ == "__main__":
 
-    for task in ["classification", "regression"]:
-        for sequence in ["T1", "T2", "T1T2"]:
-            for examination in ["pre", "post", "prepost"]:
+    for model_depth in [34]:
+        for task in ["classification"]:
+            for sequence in ["T1", "T2", "T1T2"]:
+                for examination in ["pre", "post", "prepost"]:
 
-                print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
+                    print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
 
-                config = ParamConfigurator()
-                config.task = task
-                config.sequence = sequence
-                config.examination = examination
+                    config = ParamConfigurator()
+                    config.model_depth = model_depth
+                    config.task = task
+                    config.sequence = sequence
+                    config.examination = examination
 
-                preprocess = Preprocessor(config=config)
-                preprocess()
-                mlflow.set_experiment(f'{config.model_name}_{config.task}')
-                date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
-                with mlflow.start_run(run_name=date, log_system_metrics=True):
-                    main(config)    
+                    preprocess = Preprocessor(config=config)
+                    preprocess()
+                    mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
+                    date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
+                    with mlflow.start_run(run_name=date, log_system_metrics=False):
+                        main(config)    
 
-                print(f"\nEnd Training: {task} | {sequence} | {examination}\n")            
+                    print(f"\nEnd Training: {task} | {sequence} | {examination}\n")            
                 

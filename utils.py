@@ -4,6 +4,11 @@ import torch
 import os
 import subprocess
 import mlflow
+import matplotlib.pyplot as plt
+
+from PIL import Image
+from torchvision import transforms
+from sklearn.metrics import confusion_matrix
 
 def set_seed(seed: int) -> None:
     """TODO: Docstring"""
@@ -27,3 +32,33 @@ def save_conda_env(config) -> None:
     command = f"conda env export -n {conda_env} > {config.run_dir}/environment.yml"
     subprocess.call(command, shell=True)
     mlflow.log_artifact(f"{config.run_dir}/environment.yml")
+
+
+def create_confusion_matrix(y_true, y_pred):
+    """TODO: Docstring"""
+
+    cm = confusion_matrix(y_true, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+
+    fig, ax = plt.subplots(figsize=(7.5, 7.5))
+    ax.matshow(cm, cmap=plt.cm.Blues)
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(x=j, y=i, s=cm[i, j], va='center', ha='center', size='xx-large')
+
+    plt.xlabel('Predicted Label', fontsize=18)
+    plt.ylabel('True Label', fontsize=18)
+    image_path = "./temp.png"
+    plt.savefig(image_path)
+
+    image = Image.open(image_path)
+    transform = transforms.ToTensor()
+    image_tensor = transform(image)
+
+    specificity = tn / (tn + fp)
+    sensitivity = tp / (tp + fn)
+
+    os.remove(image_path)
+
+    # return image_tensor, sensitivity, specificity
+    return image, sensitivity, specificity
