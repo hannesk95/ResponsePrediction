@@ -59,6 +59,7 @@ class ParamConfigurator:
         assert self.imbalance in ['weight', 'oversample'] 
         self.imbalance_loss = config['training']['imbalance_loss']
         assert self.imbalance_loss in ['MCC', 'F1']
+        self.augmentation = config['training'].getboolean('augmentation')
 
         # Optimizer
         self.learning_rate = config['optimizer'].getfloat('learning_rate')        
