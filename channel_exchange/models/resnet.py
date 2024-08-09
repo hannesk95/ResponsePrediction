@@ -217,7 +217,8 @@ class ResNet(nn.Module):
 
         x = self.avgpool(x)
 
-        x = x.view(x.size(0), -1)
+        x = [tensor.view(tensor.size(0), -1) for tensor in x]
+        # x = x.view(x.size(0), -1)
         x = self.fc(x)
 
         return x
