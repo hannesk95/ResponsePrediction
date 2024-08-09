@@ -237,22 +237,22 @@ def main(config) -> None:
                 cm = confusion_matrix(train_true, train_pred)                
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm)
                 disp.plot()
-                plt.savefig(f'train_confusion_matrix_{str(epoch).zfill(3)}.png')
-                mlflow.log_artifact(f'train_confusion_matrix_{str(epoch).zfill(3)}.png')
-                os.remove(f'train_confusion_matrix_{str(epoch).zfill(3)}.png') 
+                plt.savefig(f'./artifacts/train_confusion_matrix_{str(epoch).zfill(3)}.png')
+                mlflow.log_artifact(f'./artifacts/train_confusion_matrix_{str(epoch).zfill(3)}.png')
+                os.remove(f'./artifacts/train_confusion_matrix_{str(epoch).zfill(3)}.png') 
                 plt.close()               
 
                 cm = confusion_matrix(val_true, val_pred)                
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm)
                 disp.plot()
-                plt.savefig(f'val_confusion_matrix_{str(epoch).zfill(3)}.png')      
-                mlflow.log_artifact(f'val_confusion_matrix_{str(epoch).zfill(3)}.png')
-                os.remove(f'val_confusion_matrix_{str(epoch).zfill(3)}.png')          
+                plt.savefig(f'./artifacts/val_confusion_matrix_{str(epoch).zfill(3)}.png')      
+                mlflow.log_artifact(f'./artifacts/val_confusion_matrix_{str(epoch).zfill(3)}.png')
+                os.remove(f'./artifacts/val_confusion_matrix_{str(epoch).zfill(3)}.png')          
                 plt.close()   
 
                 if val_f1 > best_metric:
                     best_metric = val_f1
-                    torch.save(model.state_dict(), "best_metric_model.pth")
+                    torch.save(model.state_dict(), "./artifacts/best_metric_model.pth")
                     print("[INFO] Saved new best metric model")
 
             case "regression":
@@ -267,14 +267,14 @@ def main(config) -> None:
 
                 if val_r2 > best_metric:
                     best_metric = val_r2
-                    torch.save(model.state_dict(), "best_metric_model.pth")
+                    torch.save(model.state_dict(), "./artifacts/best_metric_model.pth")
                     print("[INFO] Saved new best metric model")
 
         
 
     # Test
     model.eval()
-    model.load_state_dict(torch.load("best_metric_model.pth", weights_only=True))
+    model.load_state_dict(torch.load("./artifacts/best_metric_model.pth", weights_only=True))
     with torch.no_grad():
         test_true = []
         test_pred = []
@@ -329,9 +329,9 @@ def main(config) -> None:
                 cm = confusion_matrix(test_true, test_pred)                
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm)
                 disp.plot()
-                plt.savefig('test_confusion_matrix.png')      
-                mlflow.log_artifact('test_confusion_matrix.png')
-                os.remove('test_confusion_matrix.png')
+                plt.savefig('./artifacts/test_confusion_matrix.png')      
+                mlflow.log_artifact('./artifacts/test_confusion_matrix.png')
+                os.remove('./artifacts/test_confusion_matrix.png')
                 plt.close()   
 
             case "regression":
@@ -344,6 +344,8 @@ def main(config) -> None:
                 test_mcc, test_bacc = postprocess()
                 mlflow.log_metric("test_mcc", test_mcc)      
                 mlflow.log_metric("test_bacc", test_bacc)
+    
+    os.remove("./artifacts/best_metric_model.pth")
 
 if __name__ == "__main__":
 
