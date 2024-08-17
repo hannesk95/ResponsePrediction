@@ -1,6 +1,6 @@
 import math
 from functools import partial
-from modules import ModuleParallel, BatchNorm3dParallel
+from .modules import ModuleParallel, BatchNorm3dParallel, Exchange
 
 import torch
 import torch.nn as nn
@@ -35,10 +35,10 @@ class BasicBlock(nn.Module):
         super().__init__()
 
         self.conv1 = conv3x3x3(in_planes, planes, stride)
-        self.bn1 = BatchNorm3dParallel(planes)
+        self.bn1 = BatchNorm3dParallel(planes, 2)
         self.relu = ModuleParallel(nn.ReLU(inplace=True))
         self.conv2 = conv3x3x3(planes, planes)
-        self.bn2 = BatchNorm3dParallel(planes)
+        self.bn2 = BatchNorm3dParallel(planes, 2)
         self.downsample = downsample
         self.stride = stride
 
@@ -68,20 +68,26 @@ class Bottleneck(nn.Module):
         super().__init__()
 
         self.conv1 = conv1x1x1(in_planes, planes)
-        self.bn1 = BatchNorm3dParallel(planes)
+        self.bn1 = BatchNorm3dParallel(planes, 2)
         self.conv2 = conv3x3x3(planes, planes, stride)
-        self.bn2 = BatchNorm3dParallel(planes)
+        self.bn2 = BatchNorm3dParallel(planes, 2)
         self.conv3 = conv1x1x1(planes, planes * self.expansion)
-        self.bn3 = BatchNorm3dParallel(planes * self.expansion)
+        self.bn3 = BatchNorm3dParallel(planes * self.expansion, 2)
         self.relu = ModuleParallel(nn.ReLU(inplace=True))
         self.downsample = downsample
         self.stride = stride
 
-        self.bn_threshold = None
-        assert self.bn_threshold != None
+        self.exchange = Exchange()
+        self.bn_threshold = 2e-2
+        # assert self.bn_threshold != None
 
-        self.num_parallel = None
-        assert self.num_parallel != None
+        self.num_parallel = 2
+        # assert self.num_parallel != None
+
+        self.bn2_list = []
+        for module in self.bn2.modules():
+            if isinstance(module, nn.BatchNorm3d):
+                self.bn2_list.append(module)
 
     def forward(self, x):
         residual = x
@@ -95,6 +101,7 @@ class Bottleneck(nn.Module):
         out = self.bn2(out)
         out = self.relu(out)
         out = self.exchange(out, self.bn2_list, self.bn_threshold)
+        out = self.relu(out)
 
         out = self.conv3(out)
         out = self.bn3(out)
@@ -115,13 +122,13 @@ class ResNet(nn.Module):
                  block,
                  layers,
                  block_inplanes,
-                 n_input_channels=3,
+                 n_input_channels=1,
                  conv1_t_size=7,
                  conv1_t_stride=1,
                  no_max_pool=False,
                  shortcut_type='B',
                  widen_factor=1.0,
-                 n_classes=400):
+                 n_classes=2):
         super().__init__()
 
         block_inplanes = [int(x * widen_factor) for x in block_inplanes]
@@ -135,7 +142,7 @@ class ResNet(nn.Module):
                                stride=(conv1_t_stride, 2, 2),
                                padding=(conv1_t_size // 2, 3, 3),
                                bias=False))
-        self.bn1 = BatchNorm3dParallel(self.in_planes)
+        self.bn1 = BatchNorm3dParallel(self.in_planes, 2)
         self.relu = ModuleParallel(nn.ReLU(inplace=True))
         self.maxpool = ModuleParallel(nn.MaxPool3d(kernel_size=3, stride=2, padding=1))
         self.layer1 = self._make_layer(block, block_inplanes[0], layers[0],
@@ -189,7 +196,7 @@ class ResNet(nn.Module):
             else:
                 downsample = nn.Sequential(
                     conv1x1x1(self.in_planes, planes * block.expansion, stride),
-                    BatchNorm3dParallel(planes * block.expansion))
+                    BatchNorm3dParallel(planes * block.expansion, 2))
 
         layers = []
         layers.append(
@@ -221,25 +228,32 @@ class ResNet(nn.Module):
         # x = x.view(x.size(0), -1)
         x = self.fc(x)
 
+        ens = 0
+        alpha_soft = F.softmax(torch.tensor([1.0, 1.0]), dim=0)
+        for l in range(2):
+            ens += alpha_soft[l] * x[l].detach()        
+        
+        x.append(ens)
+
         return x
 
 
-def generate_model(model_depth, **kwargs):
+def generate_model(model_depth, n_input_channels=1, n_classes=2):
     assert model_depth in [10, 18, 34, 50, 101, 152, 200]
 
     if model_depth == 10:
-        model = ResNet(BasicBlock, [1, 1, 1, 1], get_inplanes(), **kwargs)
+        model = ResNet(BasicBlock, [1, 1, 1, 1], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
     elif model_depth == 18:
-        model = ResNet(BasicBlock, [2, 2, 2, 2], get_inplanes(), **kwargs)
+        model = ResNet(BasicBlock, [2, 2, 2, 2], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
     elif model_depth == 34:
-        model = ResNet(BasicBlock, [3, 4, 6, 3], get_inplanes(), **kwargs)
+        model = ResNet(BasicBlock, [3, 4, 6, 3], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
     elif model_depth == 50:
-        model = ResNet(Bottleneck, [3, 4, 6, 3], get_inplanes(), **kwargs)
+        model = ResNet(Bottleneck, [3, 4, 6, 3], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
     elif model_depth == 101:
-        model = ResNet(Bottleneck, [3, 4, 23, 3], get_inplanes(), **kwargs)
+        model = ResNet(Bottleneck, [3, 4, 23, 3], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
     elif model_depth == 152:
-        model = ResNet(Bottleneck, [3, 8, 36, 3], get_inplanes(), **kwargs)
+        model = ResNet(Bottleneck, [3, 8, 36, 3], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
     elif model_depth == 200:
-        model = ResNet(Bottleneck, [3, 24, 36, 3], get_inplanes(), **kwargs)
+        model = ResNet(Bottleneck, [3, 24, 36, 3], get_inplanes(), n_input_channels=n_input_channels, n_classes=n_classes)
 
     return model
