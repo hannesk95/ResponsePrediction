@@ -9,6 +9,7 @@ from datetime import datetime
 from utils import save_conda_env
 from utils import create_confusion_matrix
 from dataset import ResNetDataset
+from dataset import CombinedDataset
 from preprocessor import Preprocessor
 from postprocessor import Postprocessor
 from monai.networks.nets import resnet
@@ -41,9 +42,12 @@ def main(config) -> None:
 
     match config.dataset:
         case "sarcoma":
-            train_dataset = ResNetDataset(config=config, split="train")
-            val_dataset = ResNetDataset(config=config, split="val")
-            test_dataset = ResNetDataset(config=config, split="test")  
+            # train_dataset = ResNetDataset(config=config, split="train")
+            # val_dataset = ResNetDataset(config=config, split="val")
+            # test_dataset = ResNetDataset(config=config, split="test")  
+            train_dataset = CombinedDataset(config=config, split="train")
+            val_dataset = CombinedDataset(config=config, split="val")
+            test_dataset = CombinedDataset(config=config, split="test")  
         
         case "glioblastoma":
             raise ValueError("Not yet implemented!") # TODO
@@ -131,8 +135,13 @@ def main(config) -> None:
         for batch_idx, batch_data in enumerate(train_loader):
             inputs = batch_data[0].to(config.device)
             labels = batch_data[1].to(config.device)
+            patient_ids = batch_data[2]
             with torch.amp.autocast(device_type=config.device, dtype=torch.float16):                
                 outputs = model(inputs)
+
+                if torch.isnan(outputs).any():
+                    print(patient_ids)
+
                 if config.task == "classification":
                     loss = loss_function(outputs, labels)
                 elif config.task == "regression":
@@ -150,8 +159,12 @@ def main(config) -> None:
 
             match config.task:
                 case "classification":
-                    train_prob.append(outputs.softmax(dim=1)[:,1].detach().cpu().numpy())
-                    train_pred.append(outputs.argmax(dim=1).cpu().numpy())
+
+                    if np.isnan(outputs.softmax(dim=1)[:,1].detach().cpu().item()):
+                        train_prob.append(0.0)
+                    else:
+                        train_prob.append(outputs.softmax(dim=1)[:,1].detach().cpu().item())
+                    train_pred.append(outputs.argmax(dim=1).cpu().item())
                 case "regression":
                     train_pred.append(outputs.flatten().detach().cpu().numpy())
         
@@ -162,6 +175,7 @@ def main(config) -> None:
             case "classification":
                 train_bacc = balanced_accuracy_score(train_true, train_pred)
                 train_auc = roc_auc_score(train_true, train_prob)
+                # train_auc = 0
                 train_mcc = matthews_corrcoef(train_true, train_pred)
                 train_f1 = f1_score(train_true, train_pred)
             case "regression":
@@ -179,21 +193,29 @@ def main(config) -> None:
             for val_data in val_loader:
                 val_images = val_data[0].to(config.device)
                 val_labels = val_data[1].to(config.device)
+                val_patient_ids = val_data[2]
 
                 val_outputs = model(val_images)
+
+                if torch.isnan(val_outputs).any():
+                    print(val_patient_ids)
 
                 if config.task == "classification":
                     val_loss = loss_function(val_outputs, val_labels)
                 elif config.task == "regression":
                     val_loss = loss_function(val_outputs.flatten(), val_labels)
                 
-                val_epoch_loss =+ val_loss.item()
+                val_epoch_loss += val_loss.item()
                 val_true.append(val_labels.cpu().numpy())
 
                 match config.task:
                     case "classification":
-                        val_prob.append(val_outputs.softmax(dim=1)[:,1].detach().cpu().numpy())
-                        val_pred.append(val_outputs.argmax(dim=1).cpu().numpy())
+                        if np.isnan(val_outputs.softmax(dim=1)[:,1].detach().cpu().item()):
+                            print(val_patient_ids)
+                            val_prob.append(0.0)
+                        else:
+                            val_prob.append(val_outputs.softmax(dim=1)[:,1].detach().cpu().item())
+                        val_pred.append(val_outputs.argmax(dim=1).cpu().item())
                     case "regression":
                         val_pred.append(val_outputs.flatten().cpu().numpy())                            
             
@@ -202,6 +224,7 @@ def main(config) -> None:
                 case "classification":
                     val_bacc = balanced_accuracy_score(val_true, val_pred)
                     val_auc = roc_auc_score(val_true, val_prob)         
+                    # val_auc = 0
                     val_mcc = matthews_corrcoef(val_true, val_pred)
                     val_f1 = f1_score(val_true, val_pred)
                 case "regression":
@@ -209,19 +232,11 @@ def main(config) -> None:
                     val_rmse = root_mean_squared_error(val_true, val_pred)
                     train_rmse = train_dataset.scaler.inverse_transform(np.array(val_rmse).reshape(-1, 1)).flatten().item()
 
-        # print(f"Training   loss:    {train_loss}")
-        # print(f"Validation loss:    {val_loss}\n")
         mlflow.log_metric("train_loss", train_loss, step=epoch)
         mlflow.log_metric("val_loss", val_loss, step=epoch)
 
         match config.task:
             case "classification":
-                # print(f"Training   bACC:    {train_bacc}")
-                # print(f"Validation bACC:    {val_bacc}\n")
-                # print(f"Training   AUROC:   {train_auc}")       
-                # print(f"Validation AUROC:   {val_auc}\n")
-                # print(f"Training   MCC:     {train_mcc}")       
-                # print(f"Validation MCC:     {val_mcc}\n")
                 mlflow.log_metric("train_bacc", train_bacc, step=epoch)
                 mlflow.log_metric("val_bacc", val_bacc, step=epoch)
                 mlflow.log_metric("train_auroc", train_auc, step=epoch)
@@ -256,10 +271,6 @@ def main(config) -> None:
                     print("[INFO] Saved new best metric model")
 
             case "regression":
-                # print(f"Training   R2:      {train_r2}")       
-                # print(f"Validation R2:      {val_r2}\n")
-                # print(f"Training   RMSE:    {train_rmse}")       
-                # print(f"Validation RMSE:    {val_rmse}\n")
                 mlflow.log_metric("train_r2", train_r2, step=epoch)
                 mlflow.log_metric("val_r2", val_r2, step=epoch)
                 mlflow.log_metric("train_rmse", train_rmse, step=epoch)
@@ -269,7 +280,6 @@ def main(config) -> None:
                     best_metric = val_r2
                     torch.save(model.state_dict(), "./artifacts/best_metric_model.pth")
                     print("[INFO] Saved new best metric model")
-
         
 
     # Test
@@ -289,9 +299,8 @@ def main(config) -> None:
                 test_loss = loss_function(test_outputs, test_labels)
             elif config.task == "regression":
                 test_loss = loss_function(test_outputs.flatten(), test_labels)
-            # test_loss = loss_function(test_outputs.flatten(), test_labels)
             
-            test_epoch_loss =+ test_loss.item()
+            test_epoch_loss += test_loss.item()
             test_true.append(test_labels.cpu().numpy())
 
             match config.task:
@@ -301,49 +310,43 @@ def main(config) -> None:
                 case "regression":
                     test_pred.append(test_outputs.flatten().cpu().numpy())            
         
-        test_loss = test_epoch_loss/len(test_loader)
-        match config.task:
-            case "classification":
-                test_bacc = balanced_accuracy_score(test_true, test_pred)
-                test_auc = roc_auc_score(test_true, test_prob)
-                test_mcc = matthews_corrcoef(test_true, test_pred)
-                test_f1 = f1_score(test_true, test_pred)
-            case "regression":
-                test_r2 = r2_score(test_true, test_pred)
-                test_rmse = root_mean_squared_error(test_true, test_pred)
-                train_rmse = train_dataset.scaler.inverse_transform(np.array(test_rmse).reshape(-1, 1)).flatten().item()
+    test_loss = test_epoch_loss/len(test_loader)
+    match config.task:
+        case "classification":
+            test_bacc = balanced_accuracy_score(test_true, test_pred)
+            test_auc = roc_auc_score(test_true, test_prob)
+            test_mcc = matthews_corrcoef(test_true, test_pred)
+            test_f1 = f1_score(test_true, test_pred)
+        case "regression":
+            test_r2 = r2_score(test_true, test_pred)
+            test_rmse = root_mean_squared_error(test_true, test_pred)
+            train_rmse = train_dataset.scaler.inverse_transform(np.array(test_rmse).reshape(-1, 1)).flatten().item()
 
-        # print(f"Test loss:    {test_loss}")
-        mlflow.log_metric("test_loss", test_loss)
+    mlflow.log_metric("test_loss", test_loss)
 
-        match config.task:
-            case "classification":
-                # print(f"Test bACC:    {test_bacc}")
-                # print(f"Test AUROC:   {test_auc}")       
-                # print(f"Test MCC:     {test_mcc}")
-                mlflow.log_metric("test_bacc", test_bacc)
-                mlflow.log_metric("test_auroc", test_auc)
-                mlflow.log_metric("test_mcc", test_mcc)
-                mlflow.log_metric("test_f1", test_f1)
+    match config.task:
+        case "classification":
+            mlflow.log_metric("test_bacc", test_bacc)
+            mlflow.log_metric("test_auroc", test_auc)
+            mlflow.log_metric("test_mcc", test_mcc)
+            mlflow.log_metric("test_f1", test_f1)
 
-                cm = confusion_matrix(test_true, test_pred)                
-                disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-                disp.plot()
-                plt.savefig('./artifacts/test_confusion_matrix.png')      
-                mlflow.log_artifact('./artifacts/test_confusion_matrix.png')
-                os.remove('./artifacts/test_confusion_matrix.png')
-                plt.close()   
+            cm = confusion_matrix(test_true, test_pred)                
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+            disp.plot()
+            plt.savefig('./artifacts/test_confusion_matrix.png')      
+            mlflow.log_artifact('./artifacts/test_confusion_matrix.png')
+            os.remove('./artifacts/test_confusion_matrix.png')
+            plt.close()   
 
-            case "regression":
-                # print(f"Test R2:      {test_r2}")       
-                # print(f"Test RMSE:    {test_rmse}")
-                mlflow.log_metric("test_r2", test_r2)      
-                mlflow.log_metric("test_rmse", test_rmse)    
-                
-                postprocess = Postprocessor(true_labels=test_true, pred_labels=test_pred)
-                test_mcc, test_bacc = postprocess()
-                mlflow.log_metric("test_mcc", test_mcc)      
-                mlflow.log_metric("test_bacc", test_bacc)
+        case "regression":
+            mlflow.log_metric("test_r2", test_r2)      
+            mlflow.log_metric("test_rmse", test_rmse)    
+            
+            postprocess = Postprocessor(true_labels=test_true, pred_labels=test_pred)
+            test_mcc, test_bacc = postprocess()
+            mlflow.log_metric("test_mcc", test_mcc)      
+            mlflow.log_metric("test_bacc", test_bacc)
     
     os.remove("./artifacts/best_metric_model.pth")
 
@@ -353,6 +356,7 @@ if __name__ == "__main__":
         for task in ["classification"]:
             for sequence in ["T1", "T2", "T1T2"]:
                 for examination in ["pre", "post", "prepost"]:
+                
 
                     print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
 
@@ -364,10 +368,9 @@ if __name__ == "__main__":
 
                     preprocess = Preprocessor(config=config)
                     preprocess()
-                    # mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
-                    # date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
-                    # with mlflow.start_run(run_name=date, log_system_metrics=False):
-                    #     main(config)    
+                    mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
+                    date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
+                    with mlflow.start_run(run_name=date, log_system_metrics=False):
+                        main(config)    
 
-                    # print(f"\nEnd Training: {task} | {sequence} | {examination}\n")            
-                
+                    print(f"\nEnd Training: {task} | {sequence} | {examination}\n")               

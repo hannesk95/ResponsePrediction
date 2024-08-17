@@ -78,19 +78,14 @@ class Preprocessor:
                 seg_filename = os.path.basename(seg_path).replace("nrrd", "nii.gz")
                 seg = sitk.ReadImage(seg_path)
 
-            image = sitk.ReadImage(img_path)
-            # Convert the image to a float type for processing
+            image = sitk.ReadImage(img_path)           
             image = sitk.Cast(image, sitk.sitkFloat32)
+            
+            # corrector = sitk.N4BiasFieldCorrectionImageFilter()            
+            # mask = sitk.OtsuThreshold(image, 0, 1, 200)      
+            # corrected_image = corrector.Execute(image, mask)
 
-            # Initialize the N4 Bias Field Correction object
-            corrector = sitk.N4BiasFieldCorrectionImageFilter()
-
-            # Optionally, you can provide a mask. If no mask is provided, one is automatically estimated
-            # if mask is None:
-            mask = sitk.OtsuThreshold(image, 0, 1, 200)
-
-            # Apply the bias field correction
-            corrected_image = corrector.Execute(image, mask)
+            corrected_image = image
             
             sitk.WriteImage(corrected_image, os.path.join(self.train_dir, img_filename))
             sitk.WriteImage(seg, os.path.join(self.train_dir, seg_filename))
@@ -113,19 +108,14 @@ class Preprocessor:
                 seg_filename = os.path.basename(seg_path).replace("nrrd", "nii.gz")
                 seg = sitk.ReadImage(seg_path)
 
-            image = sitk.ReadImage(img_path)
-            # Convert the image to a float type for processing
-            image = sitk.Cast(image, sitk.sitkFloat32)
+            image = sitk.ReadImage(img_path)          
+            image = sitk.Cast(image, sitk.sitkFloat32)   
 
-            # Initialize the N4 Bias Field Correction object
-            corrector = sitk.N4BiasFieldCorrectionImageFilter()
+            # corrector = sitk.N4BiasFieldCorrectionImageFilter()
+            # mask = sitk.OtsuThreshold(image, 0, 1, 200)            
+            # corrected_image = corrector.Execute(image, mask)
 
-            # Optionally, you can provide a mask. If no mask is provided, one is automatically estimated
-            # if mask is None:
-            mask = sitk.OtsuThreshold(image, 0, 1, 200)
-
-            # Apply the bias field correction
-            corrected_image = corrector.Execute(image, mask)
+            corrected_image = image
             
             sitk.WriteImage(corrected_image, os.path.join(self.test_dir, img_filename))
             sitk.WriteImage(seg, os.path.join(self.test_dir, seg_filename))
@@ -234,7 +224,7 @@ class Preprocessor:
     def register_data(self):
         pass
 
-    def get_size(self, metric="median"):
+    def get_size(self, metric="min"):
         """TODO: Docstring"""
         
         size_x = []
@@ -388,38 +378,24 @@ class Preprocessor:
     def save(self):
         """TODO: Docstring"""
 
-        # Save training files as torch .pt file
         files = self.train_files
         for image_path in tqdm(files):
             image_path = image_path.replace(".nii.gz", "_crop_norm.nii.gz")
-            nifti_img = nib.load(image_path)
-
-            # Get the data as a numpy array
-            nifti_data = nifti_img.get_fdata()
-
-            # Convert the numpy array to a PyTorch tensor
-            tensor_data = torch.tensor(nifti_data, dtype=torch.float32)
-
-            # Optionally, add a channel dimension if needed
-            tensor_data = tensor_data.unsqueeze(0)  # Shape: (1, H, W, D)
+            nifti_img = nib.load(image_path)           
+            nifti_data = nifti_img.get_fdata()         
+            tensor_data = torch.tensor(nifti_data, dtype=torch.float32)      
+            tensor_data = tensor_data.unsqueeze(0)
 
             torch_filename = image_path.replace("_crop_norm.nii.gz", ".pt")
             torch.save(tensor_data, torch_filename)
         
-        # Save testing files as torch .pt file
         files = self.test_files
         for image_path in tqdm(files):
             image_path = image_path.replace(".nii.gz", "_crop_norm.nii.gz")
             nifti_img = nib.load(image_path)
-
-            # Get the data as a numpy array
             nifti_data = nifti_img.get_fdata()
-
-            # Convert the numpy array to a PyTorch tensor
             tensor_data = torch.tensor(nifti_data, dtype=torch.float32)
-
-            # Optionally, add a channel dimension if needed
-            tensor_data = tensor_data.unsqueeze(0)  # Shape: (1, H, W, D)
+            tensor_data = tensor_data.unsqueeze(0) 
 
             torch_filename = image_path.replace("_crop_norm.nii.gz", ".pt")
             torch.save(tensor_data, torch_filename)
@@ -432,7 +408,6 @@ class Preprocessor:
         
         for file in glob(os.path.join(self.test_dir, "*.nii.gz")):
             os.remove(file)
-
 
     def __call__(self):
         if self.get_raw_data():
