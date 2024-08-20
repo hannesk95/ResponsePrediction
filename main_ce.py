@@ -6,7 +6,7 @@ from dataset import CENDataset
 from torch.utils.data import DataLoader
 import torch
 from utils import WeightedCombinedLosses
-from utils import SoftF1LossWithLogits, SoftMCCWithLogitsLoss
+from utils import SoftF1LossMulti, SoftMCCWithLogitsLoss
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import matthews_corrcoef
 from sklearn.metrics import balanced_accuracy_score
@@ -51,7 +51,7 @@ def main(config):
             optimizer = Novograd(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
 
     weights = None
-    imbalance_loss = {"MCC": SoftMCCWithLogitsLoss(), "F1": SoftF1LossWithLogits()}
+    imbalance_loss = {"MCC": SoftMCCWithLogitsLoss(), "F1": SoftF1LossMulti(num_classes=2)}
     if config.imbalance == "weight":
         weights = train_dataset.class_weights
     loss_function = WeightedCombinedLosses([torch.nn.CrossEntropyLoss(), imbalance_loss[config.imbalance_loss]], weights=weights)
@@ -78,6 +78,10 @@ def main(config):
 
             inputs = [batch_data[0], batch_data[1]]
             labels = batch_data[2]
+
+            labels_ohe = labels.cpu().numpy().reshape(-1, 1)
+            labels_ohe = train_dataset.ohe.transform(labels_ohe)
+            labels_ohe = torch.tensor(labels_ohe).to(config.device)
             
 
             with torch.amp.autocast(device_type=config.device, dtype=torch.float16):                
@@ -85,7 +89,7 @@ def main(config):
 
                 loss = 0
                 for output in outputs:
-                    loss += loss_function(output, labels)
+                    loss += loss_function(output, labels_ohe)
                 loss = loss / accumulation_steps
             scaler.scale(loss).backward()
 
@@ -95,9 +99,9 @@ def main(config):
                 optimizer.zero_grad()
             
             train_epoch_loss += loss.item() * accumulation_steps
-            train_true.append(labels.cpu().item())
-            train_prob.append(torch.vstack(outputs).sum(dim=0).view(1, -1).softmax(dim=1)[:,1].detach().cpu().item())
-            train_pred.append(torch.vstack(outputs).sum(dim=0).view(1, -1).argmax(dim=1).cpu().item())
+            train_true.extend(labels.cpu().tolist())
+            train_prob.extend(torch.vstack(outputs).sum(dim=0).view(1, -1).softmax(dim=1)[:,1].detach().cpu().tolist())
+            train_pred.extend(torch.vstack(outputs).sum(dim=0).view(1, -1).argmax(dim=1).cpu().tolist())
         
         train_loss = train_epoch_loss/len(train_loader)        
         train_bacc = balanced_accuracy_score(train_true, train_pred)
@@ -116,18 +120,22 @@ def main(config):
             val_epoch_loss = 0
             for val_data in val_loader:
                 val_inputs = [val_data[0], val_data[1]]
-                val_labels = val_data[2]              
+                val_labels = val_data[2]      
+
+                val_labels_ohe = val_labels.cpu().numpy().reshape(-1, 1)
+                val_labels_ohe = train_dataset.ohe.transform(val_labels_ohe)
+                val_labels_ohe = torch.tensor(val_labels_ohe).to(config.device)        
 
                 val_outputs = model(val_inputs)
 
                 val_loss = 0
                 for val_output in val_outputs:
-                    val_loss += loss_function(val_output, val_labels)                
+                    val_loss += loss_function(val_output, val_labels_ohe)                
                 
                 val_epoch_loss += val_loss.item()
-                val_true.append(val_labels.cpu().item())                
-                val_prob.append(torch.vstack(val_outputs).sum(dim=0).view(1, -1).softmax(dim=1)[:,1].detach().cpu().item())
-                val_pred.append(torch.vstack(val_outputs).sum(dim=0).view(1, -1).argmax(dim=1).cpu().item())                                           
+                val_true.extend(val_labels.cpu().tolist())                
+                val_prob.extend(torch.vstack(val_outputs).sum(dim=0).view(1, -1).softmax(dim=1)[:,1].detach().cpu().tolist())
+                val_pred.extend(torch.vstack(val_outputs).sum(dim=0).view(1, -1).argmax(dim=1).cpu().tolist())                                           
             
         val_loss = val_epoch_loss/len(val_loader)            
         val_bacc = balanced_accuracy_score(val_true, val_pred)
@@ -176,15 +184,19 @@ def main(config):
             test_inputs = [test_data[0], test_data[1]]
             test_labels = test_data[2]
 
+            test_labels_ohe = test_labels.cpu().numpy().reshape(-1, 1)
+            test_labels_ohe = train_dataset.ohe.transform(test_labels_ohe)
+            test_labels_ohe = torch.tensor(test_labels_ohe).to(config.device)
+
             test_outputs = model(test_inputs)
             test_loss = 0
             for test_output in test_outputs:
-                test_loss += loss_function(test_output, test_labels)                
+                test_loss += loss_function(test_output, test_labels_ohe)                
             
             test_epoch_loss += test_loss.item()
-            test_true.append(test_labels.cpu().item())                
-            test_prob.append(torch.vstack(test_outputs).sum(dim=0).view(1, -1).softmax(dim=1)[:,1].detach().cpu().item())
-            test_pred.append(torch.vstack(test_outputs).sum(dim=0).view(1, -1).argmax(dim=1).cpu().item())            
+            test_true.extend(test_labels.cpu().tolist())                
+            test_prob.extend(torch.vstack(test_outputs).sum(dim=0).view(1, -1).softmax(dim=1)[:,1].detach().cpu().tolist())
+            test_pred.extend(torch.vstack(test_outputs).sum(dim=0).view(1, -1).argmax(dim=1).cpu().tolist())            
         
     test_loss = test_epoch_loss/len(test_loader)    
     test_bacc = balanced_accuracy_score(test_true, test_pred)
@@ -206,20 +218,23 @@ def main(config):
     
     os.remove("./artifacts/best_metric_model.pth")
 
-if __name__ == "__main__":   
+if __name__ == "__main__":  
 
-    model_depth = 50
-    sequences = ["T1T2", "T1T2", "T1", "T2", "T1T2"]
-    examinations = ["pre", "post", "prepost", "prepost", "prepost"]
+    for accumulation_steps  in [16, 32, 64, 128]:
 
-    for i in range(5):
-        config = ParamConfigurator()
-        config.model_depth = model_depth
-        config.sequence = sequences[i]
-        config.examination = examinations[i]
-    
-        mlflow.set_experiment(f'ChannelExchange_3DResNet{str(model_depth)}')
-        date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
-        with mlflow.start_run(run_name=date, log_system_metrics=False):
-            main(config) 
+        model_depth = 50
+        sequences = ["T1T2", "T1T2", "T1", "T2", "T1T2"]
+        examinations = ["pre", "post", "prepost", "prepost", "prepost"]
+
+        for i in range(5):
+            config = ParamConfigurator()
+            config.model_depth = model_depth
+            config.sequence = sequences[i]
+            config.examination = examinations[i]
+            config.accumulation_steps = accumulation_steps
+        
+            mlflow.set_experiment(f'3DResNet{str(model_depth)}_channelexchange')
+            date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
+            with mlflow.start_run(run_name=date, log_system_metrics=False):
+                main(config) 
 

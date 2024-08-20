@@ -46,7 +46,7 @@ class ParamConfigurator:
         # Architecture
         self.model_name = config['architecture']['model_name']
         self.model_depth = config['architecture'].getint('model_depth')
-        assert self.model_depth in [18, 34, 50, 101, 152, 200], "Please choose model depth out ouf '18', '34', '50', '101', '152', '200'"
+        assert self.model_depth in [10, 18, 34, 50, 101, 152, 200], "Please choose model depth out ouf '10', '18', '34', '50', '101', '152', '200'"
 
         # Training
         self.task = config['training']['task']
@@ -60,6 +60,7 @@ class ParamConfigurator:
         self.imbalance_loss = config['training']['imbalance_loss']
         assert self.imbalance_loss in ['MCC', 'F1']
         self.augmentation = config['training'].getboolean('augmentation')
+        self.pretrained = config['training'].getboolean('pretrained')
 
         # Optimizer
         self.learning_rate = config['optimizer'].getfloat('learning_rate')        

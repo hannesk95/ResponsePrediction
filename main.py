@@ -1,4 +1,5 @@
 import os
+import gc
 import torch
 import mlflow
 import numpy as np
@@ -29,12 +30,15 @@ from sklearn.metrics import root_mean_squared_error
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 from utils import WeightedCombinedLosses
-from utils import SoftF1LossWithLogits
+from utils import SoftF1LossMulti
 from utils import SoftMCCWithLogitsLoss
+from resnet_tencent import generate_model
 
 
 def main(config) -> None:
 
+    torch.cuda.empty_cache()
+    gc.collect()
     save_conda_env(config)
     # save_python_files(config) # TODO: save python files tracked by git in artifacts
     mlflow.log_params(config.__dict__)    
@@ -55,9 +59,9 @@ def main(config) -> None:
     sampler = WeightedRandomSampler(weights=train_dataset.sample_weights, 
                                     num_samples=len(train_dataset.sample_weights),
                                     replacement=True)
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, sampler=sampler)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers, sampler=sampler, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
     num_channels = 0
     match config.sequence:
@@ -77,12 +81,13 @@ def main(config) -> None:
     match config.task:
         case "classification":
             weights = None
-            imbalance_loss = {"MCC": SoftMCCWithLogitsLoss(), "F1": SoftF1LossWithLogits()}
+            output_neurons = 2
+            imbalance_loss = {"MCC": SoftMCCWithLogitsLoss(), "F1": SoftF1LossMulti(num_classes=output_neurons)}
             if config.imbalance == "weight":
                 weights = train_dataset.class_weights                
             
             loss_function = WeightedCombinedLosses([torch.nn.CrossEntropyLoss(), imbalance_loss[config.imbalance_loss]], weights=weights)
-            output_neurons = 2
+            
         case "regression":
             loss_function = torch.nn.MSELoss()    
             output_neurons = 1
@@ -90,16 +95,41 @@ def main(config) -> None:
     match config.model_name:
         case "ResNet":
             match config.model_depth:
+                case 10:
+                    pretrain_path = None
+                    if config.pretrained:
+                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_10_23dataset.pth"
+                    model = generate_model(model_depth=10, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path)#.to(config.device)                     
                 case 18:
-                    model = resnet.resnet18(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)   
+                    pretrain_path = None
+                    if config.pretrained:
+                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_18_23dataset.pth"
+                    # model = resnet.resnet18(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)   
+                    model = generate_model(model_depth=18, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
                 case 34:
-                    model = resnet.resnet34(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)
+                    pretrain_path = None
+                    if config.pretrained:
+                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_34_23dataset.pth"
+                    # model = resnet.resnet34(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)
+                    model = generate_model(model_depth=34, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device) 
                 case 50:
-                    model = resnet.resnet50(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
+                    pretrain_path = None
+                    if config.pretrained:
+                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_50_23dataset.pth"
+                    # model = resnet.resnet50(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
+                    model = generate_model(model_depth=50, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
                 case 101:
-                    model = resnet.resnet101(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
+                    pretrain_path = None
+                    if config.pretrained:
+                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/pretrain/resnet_101.pth"
+                    # model = resnet.resnet101(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
+                    model = generate_model(model_depth=101, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
                 case 152:
-                    model = resnet.resnet152(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)    
+                    pretrain_path = None
+                    if config.pretrained:
+                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/pretrain/resnet_152.pth"
+                    # model = resnet.resnet152(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)    
+                    model = generate_model(model_depth=152, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
         case _:
             raise ValueError(f"Given model name '{config.model_name}' is not implemented!")  
     
@@ -125,7 +155,8 @@ def main(config) -> None:
     num_epochs = config.epochs
     best_metric = -1
     for epoch in range(num_epochs):
-        print(f"Epoch {epoch+1}/{num_epochs}")
+        epoch = epoch + 1
+        print(f"Epoch {epoch}/{num_epochs}")
         model.train()
         train_true = []
         train_pred = []
@@ -133,17 +164,16 @@ def main(config) -> None:
         train_epoch_loss = 0
         lr = scheduler.get_last_lr()[0]
         for batch_idx, batch_data in enumerate(train_loader):
-            inputs = batch_data[0].to(config.device)
+            inputs = batch_data[0].to(config.device)          
             labels = batch_data[1].to(config.device)
-            patient_ids = batch_data[2]
+
             with torch.amp.autocast(device_type=config.device, dtype=torch.float16):                
                 outputs = model(inputs)
-
-                if torch.isnan(outputs).any():
-                    print(patient_ids)
-
                 if config.task == "classification":
-                    loss = loss_function(outputs, labels)
+                    labels_ohe = labels.cpu().numpy().reshape(-1, 1)
+                    labels_ohe = train_dataset.ohe.transform(labels_ohe)
+                    labels_ohe = torch.tensor(labels_ohe).to(config.device)
+                    loss = loss_function(outputs, labels_ohe)
                 elif config.task == "regression":
                     loss = loss_function(outputs.flatten(), labels)
                 loss = loss / accumulation_steps
@@ -155,18 +185,14 @@ def main(config) -> None:
                 optimizer.zero_grad()
 
             train_epoch_loss += loss.item() * accumulation_steps
-            train_true.append(labels.cpu().numpy())
+            train_true.extend(labels.cpu().tolist())
 
             match config.task:
-                case "classification":
-
-                    if np.isnan(outputs.softmax(dim=1)[:,1].detach().cpu().item()):
-                        train_prob.append(0.0)
-                    else:
-                        train_prob.append(outputs.softmax(dim=1)[:,1].detach().cpu().item())
-                    train_pred.append(outputs.argmax(dim=1).cpu().item())
+                case "classification":                    
+                    train_prob.extend(outputs.softmax(dim=1)[:,1].detach().cpu().tolist())
+                    train_pred.extend(outputs.argmax(dim=1).cpu().tolist())
                 case "regression":
-                    train_pred.append(outputs.flatten().detach().cpu().numpy())
+                    train_pred.extend(outputs.flatten().detach().cpu().tolist())
         
         train_loss = train_epoch_loss/len(train_loader)
         scheduler.step()
@@ -192,32 +218,27 @@ def main(config) -> None:
             val_epoch_loss = 0
             for val_data in val_loader:
                 val_images = val_data[0].to(config.device)
-                val_labels = val_data[1].to(config.device)
-                val_patient_ids = val_data[2]
+                val_labels = val_data[1].to(config.device)               
 
-                val_outputs = model(val_images)
-
-                if torch.isnan(val_outputs).any():
-                    print(val_patient_ids)
+                val_outputs = model(val_images)                
 
                 if config.task == "classification":
-                    val_loss = loss_function(val_outputs, val_labels)
+                    val_labels_ohe = val_labels.cpu().numpy().reshape(-1, 1)
+                    val_labels_ohe = train_dataset.ohe.transform(val_labels_ohe)
+                    val_labels_ohe = torch.tensor(val_labels_ohe).to(config.device)
+                    val_loss = loss_function(val_outputs, val_labels_ohe)
                 elif config.task == "regression":
                     val_loss = loss_function(val_outputs.flatten(), val_labels)
                 
                 val_epoch_loss += val_loss.item()
-                val_true.append(val_labels.cpu().numpy())
+                val_true.extend(val_labels.cpu().tolist())
 
                 match config.task:
-                    case "classification":
-                        if np.isnan(val_outputs.softmax(dim=1)[:,1].detach().cpu().item()):
-                            print(val_patient_ids)
-                            val_prob.append(0.0)
-                        else:
-                            val_prob.append(val_outputs.softmax(dim=1)[:,1].detach().cpu().item())
-                        val_pred.append(val_outputs.argmax(dim=1).cpu().item())
+                    case "classification":                        
+                        val_prob.extend(val_outputs.softmax(dim=1)[:,1].detach().cpu().tolist())
+                        val_pred.extend(val_outputs.argmax(dim=1).cpu().tolist())
                     case "regression":
-                        val_pred.append(val_outputs.flatten().cpu().numpy())                            
+                        val_pred.extend(val_outputs.flatten().cpu().tolist())                            
             
             val_loss = val_epoch_loss/len(val_loader)
             match config.task:
@@ -296,19 +317,22 @@ def main(config) -> None:
 
             test_outputs = model(test_images)
             if config.task == "classification":
-                test_loss = loss_function(test_outputs, test_labels)
+                test_labels_ohe = test_labels.cpu().numpy().reshape(-1, 1)
+                test_labels_ohe = train_dataset.ohe.transform(test_labels_ohe)
+                test_labels_ohe = torch.tensor(test_labels_ohe).to(config.device)
+                test_loss = loss_function(test_outputs, test_labels_ohe)
             elif config.task == "regression":
                 test_loss = loss_function(test_outputs.flatten(), test_labels)
             
             test_epoch_loss += test_loss.item()
-            test_true.append(test_labels.cpu().numpy())
+            test_true.extend(test_labels.cpu().numpy())
 
             match config.task:
                 case "classification":
-                    test_prob.append(test_outputs.softmax(dim=1)[:,1].detach().cpu().numpy())
-                    test_pred.append(test_outputs.argmax(dim=1).cpu().numpy())    
+                    test_prob.extend(test_outputs.softmax(dim=1)[:,1].detach().cpu().tolist())
+                    test_pred.extend(test_outputs.argmax(dim=1).cpu().tolist())    
                 case "regression":
-                    test_pred.append(test_outputs.flatten().cpu().numpy())            
+                    test_pred.extend(test_outputs.flatten().cpu().tolist())            
         
     test_loss = test_epoch_loss/len(test_loader)
     match config.task:
@@ -352,25 +376,26 @@ def main(config) -> None:
 
 if __name__ == "__main__":
 
-    for model_depth in [34]:
-        for task in ["classification"]:
-            for sequence in ["T1", "T2", "T1T2"]:
-                for examination in ["pre", "post", "prepost"]:
-                
+    for model_depth in [10, 18, 34, 50]:
+        for pretrained in [False, True]:
+            for task in ["classification"]:
+                for sequence in ["T1", "T2", "T1T2"]:
+                    for examination in ["pre", "post", "prepost"]:                
 
-                    print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
+                        print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
 
-                    config = ParamConfigurator()
-                    config.model_depth = model_depth
-                    config.task = task
-                    config.sequence = sequence
-                    config.examination = examination
+                        config = ParamConfigurator()
+                        config.model_depth = model_depth
+                        config.pretrained = pretrained
+                        config.task = task
+                        config.sequence = sequence
+                        config.examination = examination
 
-                    preprocess = Preprocessor(config=config)
-                    preprocess()
-                    mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
-                    date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
-                    with mlflow.start_run(run_name=date, log_system_metrics=False):
-                        main(config)    
+                        preprocess = Preprocessor(config=config)
+                        preprocess()
+                        mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
+                        date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
+                        with mlflow.start_run(run_name=date, log_system_metrics=False):
+                            main(config)    
 
-                    print(f"\nEnd Training: {task} | {sequence} | {examination}\n")               
+                        print(f"\nEnd Training: {task} | {sequence} | {examination}\n")               

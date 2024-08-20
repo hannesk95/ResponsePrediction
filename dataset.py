@@ -12,6 +12,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.preprocessing import OneHotEncoder
 
 
 class ResNetDataset(Dataset):
@@ -226,6 +227,10 @@ class CombinedDataset(Dataset):
         self.labels = [int(os.path.basename(filepath).split("_")[-1].replace(".pt", ""))
                        for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))][::4]
         
+        self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array(self.labels).reshape(-1, 1))
+        
+           
+        
         
         if self.split == "train":
             self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, train_size=0.5, random_state=42, stratify=self.labels)
@@ -298,6 +303,8 @@ class CENDataset(Dataset):
         self.patient_ids = sorted(list(set(self.patient_ids)))
         self.labels = [int(os.path.basename(filepath).split("_")[-1].replace(".pt", ""))
                        for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))][::4]        
+        
+        self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array(self.labels).reshape(-1, 1))
         
         
         if self.split == "train":
