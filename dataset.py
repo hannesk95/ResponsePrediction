@@ -180,7 +180,7 @@ class CombinedDataset(Dataset):
         
         match config.dataset:
             case "sarcoma":
-                self.data_dir = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/Combined"
+                self.data_dir = "./data/sarcoma/jan/Combined"
                 assert os.path.exists(self.data_dir)
             case "glioblastoma":
                 pass
