@@ -10,7 +10,7 @@ class ParamConfigurator:
     def __init__(self):
         """# TODO: Docstring"""
         config = configparser.ConfigParser()
-        config.read('/home/johannes/Code/ResponsePrediction/config.ini')
+        config.read('./config.ini')
 
         # Global
         self.seed = config['global'].getint('seed')
