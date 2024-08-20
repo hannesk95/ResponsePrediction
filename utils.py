@@ -30,10 +30,13 @@ def set_seed(seed: int) -> None:
 def save_conda_env(config) -> None:
     """TODO: Docstring"""
 
-    conda_env = os.environ['CONDA_DEFAULT_ENV']
-    command = f"conda env export -n {conda_env} > {config.run_dir}/environment.yml"
-    subprocess.call(command, shell=True)
-    mlflow.log_artifact(f"{config.run_dir}/environment.yml")
+    try:
+        conda_env = os.environ['CONDA_DEFAULT_ENV']
+        command = f"conda env export -n {conda_env} > {config.run_dir}/environment.yml"
+        subprocess.call(command, shell=True)
+        mlflow.log_artifact(f"{config.run_dir}/environment.yml")
+    except:
+        print("Conda environment is not logged!")
 
 
 def create_confusion_matrix(y_true, y_pred):
