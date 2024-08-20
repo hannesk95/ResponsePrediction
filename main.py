@@ -391,8 +391,8 @@ if __name__ == "__main__":
                         config.sequence = sequence
                         config.examination = examination
 
-                        preprocess = Preprocessor(config=config)
-                        preprocess()
+                        # preprocess = Preprocessor(config=config)
+                        # preprocess()
                         mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
                         date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
                         with mlflow.start_run(run_name=date, log_system_metrics=False):
