@@ -224,29 +224,47 @@ class CombinedDataset(Dataset):
         self.patient_ids = [os.path.basename(filepath)[:6] if os.path.basename(filepath).startswith("Sar") else os.path.basename(filepath)[:4] 
                             for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))]
         self.patient_ids = sorted(list(set(self.patient_ids)))
-        self.labels = [int(os.path.basename(filepath).split("_")[-1].replace(".pt", ""))
-                       for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))][::4]
-        
-        self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array(self.labels).reshape(-1, 1))
-        
-           
-        
-        
-        if self.split == "train":
-            self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, train_size=0.5, random_state=42, stratify=self.labels)
 
-            labels_arr = np.array(self.labels)
-            self.class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(labels_arr), y=labels_arr)
-            self.class_weights = torch.tensor(self.class_weights).to(torch.float32).to(self.config.device)
-            self.sample_weights = self.class_weights[torch.tensor(labels_arr)]
+        if config.task == "classification":
+            self.labels = [int(os.path.basename(filepath).split("_")[-1].replace(".pt", ""))
+                        for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))][::4]
+            
+            self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array(self.labels).reshape(-1, 1))
+        
+        elif config.task == "regression":
+            self.pcr_values = torch.load("/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pcr_values.pt", weights_only=True)
+            self.labels = [self.pcr_values[patient_id]/100 for patient_id in self.patient_ids] 
+                
+        if self.split == "train":
+
+            if config.task == "classification":
+                self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, train_size=0.5, random_state=42, stratify=self.labels)
+
+                labels_arr = np.array(self.labels)
+                self.class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(labels_arr), y=labels_arr)
+                self.class_weights = torch.tensor(self.class_weights).to(torch.float32).to(self.config.device)
+                self.sample_weights = self.class_weights[torch.tensor(labels_arr)]
+            elif config.task == "regression":
+                self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, train_size=0.5, random_state=42)
+
         
         elif self.split == "val":
-            _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
-            self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
+            if config.task == "classification":
+                _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
+                self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
+            elif config.task == "regression":
+                _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42)
+                self.patient_ids, _, self.labels, _ = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42)
+
 
         else:
-            _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
-            _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
+            if config.task == "classification":
+                _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
+                _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42, stratify=self.labels)
+            elif config.task == "regression":
+                _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42)
+                _, self.patient_ids, _, self.labels = train_test_split(self.patient_ids, self.labels, test_size=0.5, random_state=42)
+
 
 
     def __len__(self):            
@@ -261,7 +279,12 @@ class CombinedDataset(Dataset):
 
         images = [torch.load(path, weights_only=True) for path in all_patient_files]
         image = torch.concatenate(images, dim=0)
-        label = torch.tensor(int(os.path.basename(all_patient_files[0]).split("_")[-1].replace(".pt", ""))).to(torch.long)     
+
+        if self.config.task == "classification":
+            label = torch.tensor(int(os.path.basename(all_patient_files[0]).split("_")[-1].replace(".pt", ""))).to(torch.long)     
+        elif self.config.task == "regression":
+            label = torch.tensor(self.pcr_values[patient_id]/100)
+
 
         if self.split == "train":
             if self.config.augmentation:

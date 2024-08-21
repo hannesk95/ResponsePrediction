@@ -56,10 +56,14 @@ def main(config) -> None:
         case "glioblastoma":
             raise ValueError("Not yet implemented!") # TODO
 
-    sampler = WeightedRandomSampler(weights=train_dataset.sample_weights, 
-                                    num_samples=len(train_dataset.sample_weights),
-                                    replacement=True)
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers, sampler=sampler, drop_last=True)
+    if config.task == "classification":
+        sampler = WeightedRandomSampler(weights=train_dataset.sample_weights, 
+                                        num_samples=len(train_dataset.sample_weights),
+                                        replacement=True)
+        train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers, sampler=sampler, drop_last=True)
+    elif config.task == "regression":
+        train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=config.num_workers, drop_last=True)
+
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
     test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
 
@@ -98,36 +102,36 @@ def main(config) -> None:
                 case 10:
                     pretrain_path = None
                     if config.pretrained:
-                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_10_23dataset.pth"
+                        pretrain_path = "./data/sarcoma/jan/pretrain/resnet_10_23dataset.pth"
                     model = generate_model(model_depth=10, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path)#.to(config.device)                     
                 case 18:
                     pretrain_path = None
                     if config.pretrained:
-                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_18_23dataset.pth"
+                        pretrain_path = "./data/sarcoma/jan/pretrain/resnet_18_23dataset.pth"
                     # model = resnet.resnet18(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)   
                     model = generate_model(model_depth=18, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
                 case 34:
                     pretrain_path = None
                     if config.pretrained:
-                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_34_23dataset.pth"
+                        pretrain_path = "./data/sarcoma/jan/pretrain/resnet_34_23dataset.pth"
                     # model = resnet.resnet34(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)
                     model = generate_model(model_depth=34, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device) 
                 case 50:
                     pretrain_path = None
                     if config.pretrained:
-                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/resnet_50_23dataset.pth"
+                        pretrain_path = "./data/sarcoma/jan/pretrain/resnet_50_23dataset.pth"
                     # model = resnet.resnet50(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
                     model = generate_model(model_depth=50, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
                 case 101:
                     pretrain_path = None
                     if config.pretrained:
-                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/pretrain/resnet_101.pth"
+                        pretrain_path = "./data/sarcoma/jan/pretrain/pretrain/resnet_101.pth"
                     # model = resnet.resnet101(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)  
                     model = generate_model(model_depth=101, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
                 case 152:
                     pretrain_path = None
                     if config.pretrained:
-                        pretrain_path = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pretrain/pretrain/resnet_152.pth"
+                        pretrain_path = "./data/sarcoma/jan/pretrain/pretrain/resnet_152.pth"
                     # model = resnet.resnet152(spatial_dims=3, n_input_channels=num_channels, num_classes=output_neurons).to(config.device)    
                     model = generate_model(model_depth=152, in_channels=num_channels, num_cls_classes=output_neurons, pretrain_path=pretrain_path).to(config.device)
         case _:
@@ -206,8 +210,8 @@ def main(config) -> None:
                 train_f1 = f1_score(train_true, train_pred)
             case "regression":
                 train_r2 = r2_score(train_true, train_pred)
-                train_rmse = root_mean_squared_error(train_true, train_pred)
-                train_rmse = train_dataset.scaler.inverse_transform(np.array(train_rmse).reshape(-1, 1)).flatten().item()
+                train_rmse = root_mean_squared_error(train_true, train_pred)*100
+                # train_rmse = train_dataset.scaler.inverse_transform(np.array(train_rmse).reshape(-1, 1)).flatten().item()
 
         # Validation
         model.eval()
@@ -250,8 +254,8 @@ def main(config) -> None:
                     val_f1 = f1_score(val_true, val_pred)
                 case "regression":
                     val_r2 = r2_score(val_true, val_pred)
-                    val_rmse = root_mean_squared_error(val_true, val_pred)
-                    train_rmse = train_dataset.scaler.inverse_transform(np.array(val_rmse).reshape(-1, 1)).flatten().item()
+                    val_rmse = root_mean_squared_error(val_true, val_pred)*100
+                    # train_rmse = train_dataset.scaler.inverse_transform(np.array(val_rmse).reshape(-1, 1)).flatten().item()
 
         mlflow.log_metric("train_loss", train_loss, step=epoch)
         mlflow.log_metric("val_loss", val_loss, step=epoch)
@@ -343,8 +347,8 @@ def main(config) -> None:
             test_f1 = f1_score(test_true, test_pred)
         case "regression":
             test_r2 = r2_score(test_true, test_pred)
-            test_rmse = root_mean_squared_error(test_true, test_pred)
-            train_rmse = train_dataset.scaler.inverse_transform(np.array(test_rmse).reshape(-1, 1)).flatten().item()
+            test_rmse = root_mean_squared_error(test_true, test_pred)*100
+            # train_rmse = train_dataset.scaler.inverse_transform(np.array(test_rmse).reshape(-1, 1)).flatten().item()
 
     mlflow.log_metric("test_loss", test_loss)
 
@@ -377,7 +381,7 @@ def main(config) -> None:
 if __name__ == "__main__":
 
     for model_depth in [10, 18, 34, 50]:
-        for pretrained in [False, True]:
+        for pretrained in [True, False]:
             for task in ["classification"]:
                 for sequence in ["T1", "T2", "T1T2"]:
                     for examination in ["pre", "post", "prepost"]:                
