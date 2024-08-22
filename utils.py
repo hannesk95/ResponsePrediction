@@ -39,6 +39,27 @@ def save_conda_env(config) -> None:
         print("Conda environment is not logged!")
 
 
+def save_python_files(config) -> None:
+    """TODO: Docstring"""
+
+    files = get_git_tracked_files(os.getcwd())
+    _ = [mlflow.log_artifact(f"./{file}") for file in files]
+    
+
+
+
+def get_git_tracked_files(repo_dir) -> list:
+    # Get the list of tracked files using Git
+    try:
+        result = subprocess.run(['git', '-C', repo_dir, 'ls-files'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            raise Exception(result.stderr)
+        files = result.stdout.splitlines()
+        return files
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
+
 def create_confusion_matrix(y_true, y_pred):
     """TODO: Docstring"""
 

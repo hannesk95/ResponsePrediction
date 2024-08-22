@@ -60,11 +60,12 @@ class ParamConfigurator:
         self.imbalance_loss = config['training']['imbalance_loss']
         assert self.imbalance_loss in ['MCC', 'F1']
         self.augmentation = config['training'].getboolean('augmentation')
+        self.pretrained = config['training'].getboolean('pretrained')
 
         # Optimizer
         self.learning_rate = config['optimizer'].getfloat('learning_rate')        
         self.optimizer = config['optimizer']['optimizer']
-        assert self.optimizer in ["SGD", "Adam", "Novograd"]
+        assert self.optimizer in ["SGD", "AdamW", "Novograd"]
         self.nesterov = config['optimizer'].getboolean('nesterov')
         self.momentum = config['optimizer'].getfloat('momentum')
         self.weight_decay = config['optimizer'].getfloat('weight_decay')

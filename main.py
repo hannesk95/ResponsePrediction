@@ -1,5 +1,6 @@
 import os
 import gc
+import uuid
 import torch
 import mlflow
 import numpy as np
@@ -8,6 +9,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datetime import datetime
 from utils import save_conda_env
+from utils import save_python_files
 from utils import create_confusion_matrix
 from dataset import ResNetDataset
 from dataset import CombinedDataset
@@ -40,6 +42,7 @@ def main(config) -> None:
     torch.cuda.empty_cache()
     gc.collect()
     save_conda_env(config)
+    save_python_files(config)
     # save_python_files(config) # TODO: save python files tracked by git in artifacts
     mlflow.log_params(config.__dict__)    
 
@@ -138,18 +141,20 @@ def main(config) -> None:
             raise ValueError(f"Given model name '{config.model_name}' is not implemented!")  
     
     if config.task == "regression":
-        model.fc = torch.nn.Sequential(torch.nn.Linear(model.fc.in_features, out_features=output_neurons, bias=True),
-                                       torch.nn.Sigmoid()).to(config.device)
+        pass
+        # model.fc = torch.nn.Sequential(torch.nn.Linear(model.fc.in_features, out_features=output_neurons, bias=True),
+        #                                torch.nn.Sigmoid()).to(config.device)
 
     match config.optimizer:
         case "SGD":
-            optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-3)
         case "Adam":
             optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         case "Novograd":
             optimizer = Novograd(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
 
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=config.scheduler_step, gamma=config.scheduler_gamma)
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=config.scheduler_step, gamma=config.scheduler_gamma)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
     # Gradient accumulation and AMP
     accumulation_steps = config.accumulation_steps
@@ -158,6 +163,8 @@ def main(config) -> None:
     # Training loop
     num_epochs = config.epochs
     best_metric = -1
+
+    best_model_id = uuid.uuid4().hex
     for epoch in range(num_epochs):
         epoch = epoch + 1
         print(f"Epoch {epoch}/{num_epochs}")
@@ -180,13 +187,11 @@ def main(config) -> None:
                     loss = loss_function(outputs, labels_ohe)
                 elif config.task == "regression":
                     loss = loss_function(outputs.flatten(), labels)
-                loss = loss / accumulation_steps
-            scaler.scale(loss).backward()
-
-            if (batch_idx + 1) % accumulation_steps == 0:
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
+            
+            scaler.scale(loss).backward()            
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
             train_epoch_loss += loss.item() * accumulation_steps
             train_true.extend(labels.cpu().tolist())
@@ -211,6 +216,7 @@ def main(config) -> None:
             case "regression":
                 train_r2 = r2_score(train_true, train_pred)
                 train_rmse = root_mean_squared_error(train_true, train_pred)*100
+                # train_rmse = root_mean_squared_error(train_true, train_pred)
                 # train_rmse = train_dataset.scaler.inverse_transform(np.array(train_rmse).reshape(-1, 1)).flatten().item()
 
         # Validation
@@ -224,15 +230,16 @@ def main(config) -> None:
                 val_images = val_data[0].to(config.device)
                 val_labels = val_data[1].to(config.device)               
 
-                val_outputs = model(val_images)                
+                with torch.amp.autocast(device_type=config.device, dtype=torch.float16): 
+                    val_outputs = model(val_images)                
 
-                if config.task == "classification":
-                    val_labels_ohe = val_labels.cpu().numpy().reshape(-1, 1)
-                    val_labels_ohe = train_dataset.ohe.transform(val_labels_ohe)
-                    val_labels_ohe = torch.tensor(val_labels_ohe).to(config.device)
-                    val_loss = loss_function(val_outputs, val_labels_ohe)
-                elif config.task == "regression":
-                    val_loss = loss_function(val_outputs.flatten(), val_labels)
+                    if config.task == "classification":
+                        val_labels_ohe = val_labels.cpu().numpy().reshape(-1, 1)
+                        val_labels_ohe = train_dataset.ohe.transform(val_labels_ohe)
+                        val_labels_ohe = torch.tensor(val_labels_ohe).to(config.device)
+                        val_loss = loss_function(val_outputs, val_labels_ohe)
+                    elif config.task == "regression":
+                        val_loss = loss_function(val_outputs.flatten(), val_labels)
                 
                 val_epoch_loss += val_loss.item()
                 val_true.extend(val_labels.cpu().tolist())
@@ -255,6 +262,7 @@ def main(config) -> None:
                 case "regression":
                     val_r2 = r2_score(val_true, val_pred)
                     val_rmse = root_mean_squared_error(val_true, val_pred)*100
+                    # val_rmse = root_mean_squared_error(val_true, val_pred)
                     # train_rmse = train_dataset.scaler.inverse_transform(np.array(val_rmse).reshape(-1, 1)).flatten().item()
 
         mlflow.log_metric("train_loss", train_loss, step=epoch)
@@ -290,10 +298,13 @@ def main(config) -> None:
                 os.remove(f'./artifacts/val_confusion_matrix_{str(epoch).zfill(3)}.png')          
                 plt.close()   
 
-                if val_f1 > best_metric:
-                    best_metric = val_f1
-                    torch.save(model.state_dict(), "./artifacts/best_metric_model.pth")
+                if val_mcc > best_metric:
+                    best_metric = val_mcc
+                    torch.save(model.state_dict(), f"./artifacts/best_metric_model_{best_model_id}.pth")
                     print("[INFO] Saved new best metric model")
+                elif epoch == 1:
+                    torch.save(model.state_dict(), f"./artifacts/best_metric_model_{best_model_id}.pth")
+
 
             case "regression":
                 mlflow.log_metric("train_r2", train_r2, step=epoch)
@@ -303,13 +314,15 @@ def main(config) -> None:
 
                 if val_r2 > best_metric:
                     best_metric = val_r2
-                    torch.save(model.state_dict(), "./artifacts/best_metric_model.pth")
+                    torch.save(model.state_dict(), f"./artifacts/best_metric_model_{best_model_id}.pth")
                     print("[INFO] Saved new best metric model")
+                elif epoch == 1:
+                    torch.save(model.state_dict(), f"./artifacts/best_metric_model_{best_model_id}.pth")
         
 
     # Test
     model.eval()
-    model.load_state_dict(torch.load("./artifacts/best_metric_model.pth", weights_only=True))
+    model.load_state_dict(torch.load(f"./artifacts/best_metric_model_{best_model_id}.pth", weights_only=True))
     with torch.no_grad():
         test_true = []
         test_pred = []
@@ -319,14 +332,16 @@ def main(config) -> None:
             test_images = test_data[0].to(config.device)
             test_labels = test_data[1].to(config.device)
 
-            test_outputs = model(test_images)
-            if config.task == "classification":
-                test_labels_ohe = test_labels.cpu().numpy().reshape(-1, 1)
-                test_labels_ohe = train_dataset.ohe.transform(test_labels_ohe)
-                test_labels_ohe = torch.tensor(test_labels_ohe).to(config.device)
-                test_loss = loss_function(test_outputs, test_labels_ohe)
-            elif config.task == "regression":
-                test_loss = loss_function(test_outputs.flatten(), test_labels)
+            with torch.amp.autocast(device_type=config.device, dtype=torch.float16): 
+
+                test_outputs = model(test_images)
+                if config.task == "classification":
+                    test_labels_ohe = test_labels.cpu().numpy().reshape(-1, 1)
+                    test_labels_ohe = train_dataset.ohe.transform(test_labels_ohe)
+                    test_labels_ohe = torch.tensor(test_labels_ohe).to(config.device)
+                    test_loss = loss_function(test_outputs, test_labels_ohe)
+                elif config.task == "regression":
+                    test_loss = loss_function(test_outputs.flatten(), test_labels)
             
             test_epoch_loss += test_loss.item()
             test_true.extend(test_labels.cpu().numpy())
@@ -348,6 +363,7 @@ def main(config) -> None:
         case "regression":
             test_r2 = r2_score(test_true, test_pred)
             test_rmse = root_mean_squared_error(test_true, test_pred)*100
+            # test_rmse = root_mean_squared_error(test_true, test_pred)
             # train_rmse = train_dataset.scaler.inverse_transform(np.array(test_rmse).reshape(-1, 1)).flatten().item()
 
     mlflow.log_metric("test_loss", test_loss)
@@ -376,30 +392,37 @@ def main(config) -> None:
             mlflow.log_metric("test_mcc", test_mcc)      
             mlflow.log_metric("test_bacc", test_bacc)
     
-    os.remove("./artifacts/best_metric_model.pth")
+    os.remove(f"./artifacts/best_metric_model_{best_model_id}.pth")
 
 if __name__ == "__main__":
 
-    for model_depth in [10, 18, 34, 50]:
-        for pretrained in [True, False]:
-            for task in ["classification"]:
-                for sequence in ["T1", "T2", "T1T2"]:
-                    for examination in ["pre", "post", "prepost"]:                
+    for model_depth in [50, 34, 18, 10]:
+        for pretrained in [False, True]:
+            for batch_size in [2, 4, 8]:            
+                for task in ["classification"]:
+                    for sequence in ["T1", "T2", "T1T2"]:       
+                        for examination in ["pre", "post", "prepost"]:                
+                            
 
-                        print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
+                            print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
 
-                        config = ParamConfigurator()
-                        config.model_depth = model_depth
-                        config.pretrained = pretrained
-                        config.task = task
-                        config.sequence = sequence
-                        config.examination = examination
+                            config = ParamConfigurator()
+                            config.model_depth = model_depth
+                            config.pretrained = pretrained
+                            config.batch_size = batch_size                            
+                            config.task = task
+                            config.sequence = sequence
+                            config.examination = examination                            
 
-                        # preprocess = Preprocessor(config=config)
-                        # preprocess()
-                        mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
-                        date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
-                        with mlflow.start_run(run_name=date, log_system_metrics=False):
-                            main(config)    
+                            # preprocess = Preprocessor(config=config)
+                            # preprocess()
 
-                        print(f"\nEnd Training: {task} | {sequence} | {examination}\n")               
+                            if os.path.exists("/dss/dsshome1/0E/ge37bud3/mlruns"):
+                                mlflow.set_tracking_uri("file:///dss/dsshome1/0E/ge37bud3/mlruns")
+
+                            mlflow.set_experiment(f'3D{config.model_name}{config.model_depth}_{config.task}')
+                            date = str(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
+                            with mlflow.start_run(run_name=date, log_system_metrics=False):
+                                main(config)    
+
+                            print(f"\nEnd Training: {task} | {sequence} | {examination}\n")               

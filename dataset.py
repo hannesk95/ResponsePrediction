@@ -174,9 +174,17 @@ class CombinedDataset(Dataset):
 
         self.config = config
         self.split = split
-        self.tio_transform = tio.transforms.RandomAffine(scales=0,
-                                                         degrees=0,
-                                                         translation=5)
+        # self.tio_transform = tio.transforms.RandomAffine(scales=0,
+        #                                                  degrees=0,
+        #                                                  translation=5)
+
+        self.affine = tio.transforms.RandomAffine(scales=[0.95, 1.05],
+                                                  degrees=15,
+                                                  translation=15)        
+        self.blur = tio.transforms.RandomBlur()
+        self.noise = tio.transforms.RandomNoise()
+        self.gamma = tio.transforms.RandomGamma()
+        self.tio_transform = tio.transforms.Compose([self.affine, self.blur, self.noise, self.gamma])
         
         match config.dataset:
             case "sarcoma":
@@ -284,6 +292,7 @@ class CombinedDataset(Dataset):
             label = torch.tensor(int(os.path.basename(all_patient_files[0]).split("_")[-1].replace(".pt", ""))).to(torch.long)     
         elif self.config.task == "regression":
             label = torch.tensor(self.pcr_values[patient_id]/100)
+            # label = torch.tensor(self.pcr_values[patient_id])
 
 
         if self.split == "train":
@@ -298,9 +307,15 @@ class CENDataset(Dataset):
         self.config = config
         self.split = split
         self.data_dir = "/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/Combined"
-        self.tio_transform = tio.transforms.RandomAffine(scales=0,
-                                                         degrees=0,
-                                                         translation=5)
+        
+        
+        self.affine = tio.transforms.RandomAffine(scales=[0.95, 1.05],
+                                                  degrees=15,
+                                                  translation=15)        
+        self.blur = tio.transforms.RandomBlur()
+        self.noise = tio.transforms.RandomNoise()
+        self.gamma = tio.transforms.RandomGamma()
+        self.tio_transform = tio.transforms.Compose([self.affine, self.blur, self.noise, self.gamma])
         
         if (self.config.sequence == "T1T2") & (self.config.examination == "pre"):
             self.data = glob(os.path.join(self.data_dir, "*.pt"))
@@ -352,8 +367,8 @@ class CENDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        # example1 = torch.ones(size=(1, 64, 64, 64)).cuda()
-        # example2 = torch.zeros(size=(1, 64, 64, 64)).cuda()
+        # example1 = torch.ones(size=(1, 64, 64, 64))
+        # example2 = torch.zeros(size=(1, 64, 64, 64))
         # return [example1, example2, 0]
 
         patient_id = self.patient_ids[idx]  
@@ -374,7 +389,12 @@ class CENDataset(Dataset):
             label = int(os.path.basename(t1_pre_all_patient_files[0]).split("_")[-1].replace(".pt", ""))
             label = torch.tensor(label).to(torch.long)
 
-            return t1_pre_images.cuda(), t2_pre_images.cuda(), label.cuda()
+            if self.split == "train":
+                if self.config.augmentation:
+                    t1_pre_images = self.tio_transform(t1_pre_images)
+                    t2_pre_images = self.tio_transform(t2_pre_images)
+
+            return t1_pre_images, t2_pre_images, label
 
         elif (self.config.sequence == "T1T2") & (self.config.examination == "post"):
             self.data = glob(os.path.join(self.data_dir, "*.pt"))
@@ -392,7 +412,12 @@ class CENDataset(Dataset):
             label = int(os.path.basename(t1_post_all_patient_files[0]).split("_")[-1].replace(".pt", ""))
             label = torch.tensor(label).to(torch.long)
 
-            return t1_post_images.cuda(), t2_post_images.cuda(), label.cuda()
+            if self.split == "train":
+                if self.config.augmentation:
+                    t1_post_images = self.tio_transform(t1_post_images)
+                    t2_post_images = self.tio_transform(t2_post_images)
+
+            return t1_post_images, t2_post_images, label
 
         elif (self.config.sequence == "T1") & (self.config.examination == "prepost"):
             self.data = glob(os.path.join(self.data_dir, "*T1*.pt"))
@@ -410,7 +435,12 @@ class CENDataset(Dataset):
             label = int(os.path.basename(t1_pre_all_patient_files[0]).split("_")[-1].replace(".pt", ""))
             label = torch.tensor(label).to(torch.long)
 
-            return t1_pre_images.cuda(), t1_post_images.cuda(), label.cuda()
+            if self.split == "train":
+                if self.config.augmentation:
+                    t1_pre_images = self.tio_transform(t1_pre_images)
+                    t1_post_images = self.tio_transform(t1_post_images)
+
+            return t1_pre_images, t1_post_images, label
 
         elif (self.config.sequence == "T2") & (self.config.examination == "prepost"):
             self.data = glob(os.path.join(self.data_dir, "*T2*.pt"))
@@ -428,7 +458,12 @@ class CENDataset(Dataset):
             label = int(os.path.basename(t2_pre_all_patient_files[0]).split("_")[-1].replace(".pt", ""))
             label = torch.tensor(label).to(torch.long)
 
-            return t2_pre_images.cuda(), t2_post_images.cuda(), label.cuda()
+            if self.split == "train":
+                if self.config.augmentation:
+                    t2_pre_images = self.tio_transform(t2_pre_images)
+                    t2_post_images = self.tio_transform(t2_post_images)
+
+            return t2_pre_images, t2_post_images, label
         
         elif (self.config.sequence == "T1T2") & (self.config.examination == "prepost"):
             self.data = glob(os.path.join(self.data_dir, "*.pt"))
@@ -461,7 +496,12 @@ class CENDataset(Dataset):
             label = int(os.path.basename(pre_all_patient_files[0]).split("_")[-1].replace(".pt", ""))
             label = torch.tensor(label).to(torch.long)
 
-            return pre_image.cuda(), post_image.cuda(), label.cuda()
+            if self.split == "train":
+                if self.config.augmentation:
+                    pre_image = self.tio_transform(pre_image)
+                    post_image = self.tio_transform(post_image)
+
+            return pre_image, post_image, label
 
 
         
