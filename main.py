@@ -397,12 +397,11 @@ def main(config) -> None:
 if __name__ == "__main__":
 
     for model_depth in [50, 34, 18, 10]:
-        for pretrained in [False, True]:
+        for pretrained in [True, False]:
             for batch_size in [2, 4, 8]:            
                 for task in ["classification"]:
-                    for sequence in ["T1", "T2", "T1T2"]:       
-                        for examination in ["pre", "post", "prepost"]:                
-                            
+                    for examination in ["pre", "post", "prepost"]:
+                        for sequence in ["T1", "T2", "T1T2"]:                             
 
                             print(f"\nBegin Training: {task} | {sequence} | {examination}\n")
 

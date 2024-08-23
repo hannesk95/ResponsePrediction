@@ -235,7 +235,7 @@ def main(config):
 if __name__ == "__main__":  
 
     for model_depth in [50]:
-        for pretrained in [False, True]:
+        for pretrained in [True, False]:
             for batch_size in [2, 4, 8]:
 
                 sequences = ["T1T2", "T1T2", "T1", "T2", "T1T2"]
