@@ -1,16 +1,20 @@
 import random
+import PIL.Image
+import PIL.ImageFile
 import numpy as np
 import torch
 import os
 import subprocess
 import mlflow
 import matplotlib.pyplot as plt
-from typing import Optional
+from typing import Union, Optional, Tuple, List, Dict, Set
 import torch.nn as nn
 
 from PIL import Image
+import PIL
 from torchvision import transforms
 from sklearn.metrics import confusion_matrix
+from configparser import ConfigParser
 
 def set_seed(seed: int) -> None:
     """TODO: Docstring"""
@@ -27,7 +31,7 @@ def set_seed(seed: int) -> None:
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:2"
 
 
-def save_conda_env(config) -> None:
+def save_conda_env(config: ConfigParser) -> None:
     """TODO: Docstring"""
 
     try:
@@ -39,16 +43,14 @@ def save_conda_env(config) -> None:
         print("Conda environment is not logged!")
 
 
-def save_python_files(config) -> None:
+def save_python_files(config: ConfigParser) -> None:
     """TODO: Docstring"""
 
     files = get_git_tracked_files(os.getcwd())
     _ = [mlflow.log_artifact(f"./{file}") for file in files]
-    
 
 
-
-def get_git_tracked_files(repo_dir) -> list:
+def get_git_tracked_files(repo_dir: str) -> list:
     # Get the list of tracked files using Git
     try:
         result = subprocess.run(['git', '-C', repo_dir, 'ls-files'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -60,7 +62,7 @@ def get_git_tracked_files(repo_dir) -> list:
         print(f"Error: {e}")
         return []
 
-def create_confusion_matrix(y_true, y_pred):
+def create_confusion_matrix(y_true: list, y_pred: list) -> Tuple[PIL.ImageFile.ImageFile, float, float]:
     """TODO: Docstring"""
 
     cm = confusion_matrix(y_true, y_pred)
@@ -179,10 +181,9 @@ class SoftF1LossMulti(torch.nn.Module):
         return loss
     
 
-# binary versions of the loss
 class SoftMCCLoss(nn.Module):
 
-    def forward(self, preds: torch.Tensor, labels: torch.Tensor):
+    def forward(self, preds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         tp = torch.sum(preds * labels)
         tn = torch.sum((1 - preds) * (1 - labels))
         fp = torch.sum(preds * (1 - labels))
@@ -198,16 +199,15 @@ class SoftMCCLoss(nn.Module):
 
 class SoftMCCWithLogitsLoss(SoftMCCLoss):
 
-    def forward(self, preds: torch.Tensor, labels: torch.Tensor):
+    def forward(self, preds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         preds_sigmoid = torch.sigmoid(preds)
         return super().forward(preds_sigmoid, labels)
 
 
-# multi-class versions of the loss
 class SoftMCCLossMulti(nn.Module):
     """With logits."""
 
-    def forward(self, preds: torch.Tensor, labels: torch.Tensor):
+    def forward(self, preds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         # create soft confusion matrix
         preds = torch.softmax(preds, dim=1)
 
