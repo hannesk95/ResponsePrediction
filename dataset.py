@@ -3,6 +3,9 @@ import torch
 import scipy
 import numpy as np
 import torchio as tio
+import pandas as pd
+import nibabel as ni
+import SimpleITK as sitk
 
 from glob import glob
 from pathlib import Path
@@ -14,6 +17,10 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.preprocessing import OneHotEncoder
 
+from batchgenerators.transforms.spatial_transforms import SpatialTransform_2, MirrorTransform
+from batchgenerators.transforms.color_transforms import BrightnessMultiplicativeTransform, GammaTransform, ContrastAugmentationTransform
+from batchgenerators.transforms.noise_transforms import GaussianNoiseTransform, GaussianBlurTransform
+from batchgenerators.transforms.abstract_transforms import Compose
 
 class ResNetDataset(Dataset):
     def __init__(self, config, split):
@@ -179,8 +186,8 @@ class CombinedDataset(Dataset):
         #                                                  translation=5)
 
         self.affine = tio.transforms.RandomAffine(scales=[0.95, 1.05],
-                                                  degrees=15,
-                                                  translation=15)        
+                                                  degrees=5,
+                                                  translation=5)        
         self.blur = tio.transforms.RandomBlur()
         self.noise = tio.transforms.RandomNoise()
         self.gamma = tio.transforms.RandomGamma()
@@ -234,9 +241,17 @@ class CombinedDataset(Dataset):
         self.patient_ids = sorted(list(set(self.patient_ids)))
 
         if config.task == "classification":
-            self.labels = [int(os.path.basename(filepath).split("_")[-1].replace(".pt", ""))
-                        for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))][::4]
+
+            # binary 
+            # self.labels = [int(os.path.basename(filepath).split("_")[-1].replace(".pt", ""))
+            #             for filepath in sorted(glob(os.path.join(self.data_dir, "*.pt")))][::4]
             
+            # self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array(self.labels).reshape(-1, 1))
+
+            # multiclass
+            self.pcr_values = torch.load("/home/johannes/Code/ResponsePrediction/data/sarcoma/jan/pcr_values.pt", weights_only=True)
+            self.labels = [self.pcr_values[patient_id] for patient_id in self.patient_ids]
+            self.labels = [0 if label < 50 else 1 if (label>=50)&(label<95) else 2 for label in self.labels ]
             self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array(self.labels).reshape(-1, 1))
         
         elif config.task == "regression":
@@ -289,7 +304,18 @@ class CombinedDataset(Dataset):
         image = torch.concatenate(images, dim=0)
 
         if self.config.task == "classification":
-            label = torch.tensor(int(os.path.basename(all_patient_files[0]).split("_")[-1].replace(".pt", ""))).to(torch.long)     
+            label = torch.tensor(int(os.path.basename(all_patient_files[0]).split("_")[-1].replace(".pt", ""))).to(torch.long)   
+
+            temp = self.pcr_values[patient_id]
+
+            if temp < 50:
+                label = torch.tensor(0).to(torch.long)
+            if (temp > 50) & (temp < 95):
+                label = torch.tensor(1).to(torch.long)
+            if temp >= 95:
+                label = torch.tensor(2).to(torch.long)
+            
+
         elif self.config.task == "regression":
             label = torch.tensor(self.pcr_values[patient_id]/100)
             # label = torch.tensor(self.pcr_values[patient_id])
@@ -504,5 +530,237 @@ class CENDataset(Dataset):
             return pre_image, post_image, label
 
 
+class GlioblastomaDataset(Dataset):
+    def __init__(self, config, split):
+        self.config = config
+        self.split = split
+
+        self.affine = tio.transforms.RandomAffine(scales=[0.95, 1.05],
+                                                  degrees=10,
+                                                  translation=10)        
+        self.blur = tio.transforms.RandomBlur()
+        self.noise = tio.transforms.RandomNoise()
+        self.gamma = tio.transforms.RandomGamma()
+        self.tio_transform = tio.transforms.Compose([self.affine, self.blur, self.noise, self.gamma])
+
+        patient_ids = sorted(glob("/media/johannes/WD Elements/Burdenko-Dataset/Burdenko*"))
+        n_examinations = [len(os.listdir(patient)) for patient in patient_ids]
+
+        if self.split == "train":
+            self.data, _, self.labels, _ = train_test_split(patient_ids, n_examinations, train_size=0.8, random_state=42, stratify=n_examinations)
         
+        elif self.split == "val":
+            _, self.data, _, self.labels = train_test_split(patient_ids, n_examinations, test_size=0.2, random_state=42, stratify=n_examinations)
+            self.data, _, self.labels, _ = train_test_split(self.data, self.labels, train_size=0.5, random_state=42)
         
+        elif self.split == "test":
+            _, self.data, _, self.labels = train_test_split(patient_ids, np.zeros_like(patient_ids), test_size=0.2, random_state=42, stratify=n_examinations)
+            _, self.data, _, self.labels = train_test_split(self.data, self.labels, test_size=0.5, random_state=42)
+
+        self.df = pd.read_csv("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko GBM clinical data.csv")
+        self.df = self.df[["AnonymPatientID", "Response_1st_fup", "Response_2nd_fup", "Response_3rd_fup", "Response_4th_fup", "Response_5th_fup", 
+                           "Response_6th_fup", "Response_7th_fup", "Response_8th_fup", "Response_9th_fup","Response_10th_fup"]]
+        self.df.columns = ["PatientID", "fup_1", "fup_2", "fup_3", "fup_4", "fup_5", "fup_6", "fup_7", "fup_8", "fup_9", "fup_10"]
+
+        self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array([0, 1, 2]).reshape(-1, 1))
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):              
+
+        counter = 0
+        while True:
+            patient_dir = self.data[idx]
+            patient_id = patient_dir.split("/")[-1]
+            n_examinations = len(os.listdir(patient_dir)) 
+
+            pre_idx = np.random.randint(0, n_examinations-1)
+            post_idx = pre_idx + 1
+            label = self.df[self.df.PatientID == patient_id][f"fup_{post_idx}"].item()
+
+            if label in ["stable", "progression", "response"]:
+                break
+
+            counter = counter + 1
+
+            if counter > 10:
+                idx = np.random.randint(0, len(self.data))
+
+
+        pre_examination_dir = glob(os.path.join(patient_dir, f"{pre_idx}*"))[0]
+        post_examiation_dir = glob(os.path.join(patient_dir, f"{post_idx}*"))[0]
+        
+        if self.config.sequence == "T1":
+            pre_image_path = glob(os.path.join(pre_examination_dir, "*mrcet1*reg*crop*.nii.gz"))
+            post_image_path = glob(os.path.join(post_examiation_dir, "*mrcet1*reg*crop*.nii.gz"))
+            images = pre_image_path + post_image_path
+        
+        elif self.config.sequence == "T2":
+            pre_image_path = glob(os.path.join(pre_examination_dir, "*flair*reg*crop*.nii.gz"))
+            post_image_path = glob(os.path.join(post_examiation_dir, "*flair*reg*crop*.nii.gz"))
+            images = pre_image_path + post_image_path
+
+        elif self.config.sequence == "T1T2":
+            pre_image_path_t1 = glob(os.path.join(pre_examination_dir, "*mrcet1*reg*crop*.nii.gz"))
+            post_image_path_t1 = glob(os.path.join(post_examiation_dir, "*mrcet1*reg*crop*.nii.gz"))
+
+            pre_image_path_t2 = glob(os.path.join(pre_examination_dir, "*flair*reg*crop*.nii.gz"))
+            post_image_path_t2 = glob(os.path.join(post_examiation_dir, "*flair*reg*crop*.nii.gz"))
+
+            pre_image_path = pre_image_path_t1 + pre_image_path_t2
+            post_image_path = post_image_path_t1 + post_image_path_t2
+            images = pre_image_path + post_image_path
+
+        image = [torch.tensor(sitk.GetArrayFromImage(sitk.ReadImage(file))).unsqueeze(dim=0) for file in images]
+        image = torch.concatenate(image, dim=0)
+
+        if self.split == "train":
+            if self.config.augmentation:
+                image = self.tio_transform(image) 
+
+        label = [0 if label=="stable" else 1 if label=="progression" else 2][0]
+     
+
+        return image, label        
+    
+
+class GlioblastomaDatasetNew(Dataset):
+    def __init__(self, config, split):
+        self.config = config
+        self.split = split
+
+        # self.affine = tio.transforms.RandomAffine(scales=[0.95, 1.05],
+        #                                           degrees=10,
+        #                                           translation=10)      
+        self.flip = tio.transforms.RandomFlip(axes=(0, 1))  
+        # self.blur = tio.transforms.RandomBlur(std=(0.5, 1.5))
+        self.blur = tio.transforms.RandomBlur()
+        # self.noise = tio.transforms.RandomNoise(std=(0, 0.05))
+        self.noise = tio.transforms.RandomNoise()
+        # self.gamma = tio.transforms.RandomGamma(log_gamma=(0.5, 2))
+        self.gamma = tio.transforms.RandomGamma()
+        self.tio_transform = tio.transforms.Compose([self.flip, self.blur, self.noise, self.gamma])
+
+        if self.split == "train":
+            data_dict = torch.load("/media/johannes/WD Elements/Burdenko-GBM-Progression/manifest-1679410600140/train_patient_ids.pt", weights_only=True)
+
+            files = []
+            labels = []
+            for key in data_dict.keys():
+                files.extend(list(data_dict[key].keys()))
+                labels.extend(list(data_dict[key].values()))
+
+            self.files = files
+            self.labels = [0 if label=="response" else 1 if label=="stable" else 2 for label in labels]
+
+            labels_arr = np.array(self.labels)
+            self.class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(labels_arr), y=labels_arr)
+            self.class_weights = torch.tensor(self.class_weights).to(torch.float32).to(self.config.device)
+            self.sample_weights = self.class_weights[torch.tensor(labels_arr)]
+        
+        elif self.split == "val":
+            data_dict = torch.load("/media/johannes/WD Elements/Burdenko-GBM-Progression/manifest-1679410600140/val_patient_ids.pt", weights_only=True)
+
+            files = []
+            labels = []
+            for key in data_dict.keys():
+                files.extend(list(data_dict[key].keys()))
+                labels.extend(list(data_dict[key].values()))
+
+            self.files = files
+            self.labels = [0 if label=="response" else 1 if label=="stable" else 2 for label in labels]
+        
+        elif self.split == "test":
+            data_dict = torch.load("/media/johannes/WD Elements/Burdenko-GBM-Progression/manifest-1679410600140/test_patient_ids.pt", weights_only=True)
+
+            files = []
+            labels = []
+            for key in data_dict.keys():
+                files.extend(list(data_dict[key].keys()))
+                labels.extend(list(data_dict[key].values()))
+            
+            self.files = files
+            self.labels = [0 if label=="response" else 1 if label=="stable" else 2 for label in labels]        
+
+        self.ohe = OneHotEncoder(handle_unknown='ignore', sparse_output=False).fit(np.array([0, 1, 2]).reshape(-1, 1))
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):   
+
+        file = self.files[idx]
+        label = self.labels[idx]
+
+        patient_id = file.split("_")[0]
+        pre_idx = file.split("_")[1]
+        post_idx = file.split("_")[2]
+
+        if self.config.sequence == "T1":
+            pre_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{pre_idx}*", "*mrcet1*10.pt"))
+            post_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{post_idx}*", "*mrcet1*10.pt"))
+
+            images = pre_image_path + post_image_path
+
+        elif self.config.sequence == "T2":
+            pre_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{pre_idx}*", "*flair*10.pt"))
+            post_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{post_idx}*", "*flair*10.pt"))
+
+            images = pre_image_path + post_image_path
+
+        elif self.config.sequence == "T1T2":
+
+            pre_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{pre_idx}*", "*mrcet1*10.pt"))
+            post_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{post_idx}*", "*mrcet1*10.pt"))
+
+            images = pre_image_path + post_image_path
+
+            pre_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{pre_idx}*", "*flair*10.pt"))
+            post_image_path = glob(os.path.join("/home/johannes/Code/ResponsePrediction/data/glioblastoma/Burdenko-Dataset/", patient_id, f"{post_idx}*", "*flair*10.pt"))
+
+            images = images + pre_image_path + post_image_path
+
+        # image = [torch.tensor(ni.load(file).get_fdata()).unsqueeze(dim=0) for file in images]
+        image = [torch.load(file, weights_only=True).unsqueeze(dim=0) for file in images]
+        image = torch.concatenate(image, dim=0)
+
+        if self.split == "train":
+            if self.config.augmentation:
+                image = self.tio_transform(image) 
+
+        return image, label
+    
+
+def get_train_transform(patch_size):
+    # we now create a list of transforms. These are not necessarily the best transforms to use for BraTS, this is just
+    # to showcase some things
+    tr_transforms = []
+
+    # now we mirror along all axes
+    tr_transforms.append(MirrorTransform(axes=(0, 1)))
+
+    # gamma transform. This is a nonlinear transformation of intensity values
+    # (https://en.wikipedia.org/wiki/Gamma_correction)
+    tr_transforms.append(GammaTransform(gamma_range=(0.5, 2), invert_image=False, per_channel=True, p_per_sample=0.15))
+
+    # we can also invert the image, apply the transform and then invert back
+    tr_transforms.append(GammaTransform(gamma_range=(0.5, 2), invert_image=True, per_channel=True, p_per_sample=0.15))
+
+    # Gaussian Noise
+    tr_transforms.append(GaussianNoiseTransform(noise_variance=(0, 0.05), p_per_sample=0.15))
+
+    # blurring. Some BraTS cases have very blurry modalities. This can simulate more patients with this problem and
+    # thus make the model more robust to it
+    tr_transforms.append(GaussianBlurTransform(blur_sigma=(0.5, 1.5), different_sigma_per_channel=True,
+                                               p_per_channel=0.5, p_per_sample=0.15))
+    
+    tr_transforms.append(ContrastAugmentationTransform((1.0, 1.75), per_channel=True, p_per_sample=0.15))
+
+    # brightness transform for 15% of samples
+    tr_transforms.append(BrightnessMultiplicativeTransform((0.7, 1.5), per_channel=True, p_per_sample=0.15))     
+
+    # now we compose these transforms together
+    tr_transforms = Compose(tr_transforms)
+    return tr_transforms
+
