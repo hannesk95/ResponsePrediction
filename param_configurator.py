@@ -23,13 +23,28 @@ class ParamConfigurator:
         self.dataset = config['data']['dataset']
         assert self.dataset in ["sarcoma", "glioblastoma"]
 
+        self.dataloader = config['data']['dataloader']
+        assert self.dataloader in ['torch', 'monai']
+
         self.sequence = config['data']['sequence']
         assert self.sequence in ["T1", "T2", "T1T2"], "Please choose 'T1', 'T2' or 'T1T2'!"
 
         self.examination = config['data']['examination']
         assert self.examination in ['pre', 'post', 'prepost'], "Please choose examination out of 'pre', 'post' or 'prepost'!"
 
-        self.channels = None
+        # self.channels = 0
+        # match self.sequence:
+        #     case "T1T2":
+        #         self.channels = 2
+        #     case _:
+        #         self.channels = 1
+    
+        # match self.examination:
+        #     case "prepost":
+        #         self.channels = self.channels * 2
+        #     case _:
+        #         self.channels = self.channels * 1
+
 
         self.artifact_dir = config['data']['artifact_directory']
         if not os.path.exists(self.artifact_dir):
@@ -51,6 +66,7 @@ class ParamConfigurator:
         # Training
         self.task = config['training']['task']
         assert self.task in ["classification", "regression"], "Please choose 'classification' or 'regression'!"
+        self.n_classes = config['training'].getint('n_classes')
         self.batch_size = config['training'].getint('batch_size')
         self.accumulation_steps = config['training'].getint('accumulation_steps')
         self.epochs = config['training'].getint('epochs')
@@ -65,7 +81,7 @@ class ParamConfigurator:
         # Optimizer
         self.learning_rate = config['optimizer'].getfloat('learning_rate')        
         self.optimizer = config['optimizer']['optimizer']
-        assert self.optimizer in ["SGD", "Adam", "Novograd"]
+        assert self.optimizer in ["SGD", "Adam", "Novograd", "AdamW"]
         self.nesterov = config['optimizer'].getboolean('nesterov')
         self.momentum = config['optimizer'].getfloat('momentum')
         self.weight_decay = config['optimizer'].getfloat('weight_decay')

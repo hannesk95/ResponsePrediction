@@ -94,6 +94,7 @@ def main():
 
         # Create a DataFrame of extracted features
         X = pd.DataFrame(features)
+        X.insert(0, "file", mri_files, True)
         y = np.array(labels)
 
         torch.save(features, f"{split}_features.pt")
